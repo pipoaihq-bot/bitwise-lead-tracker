@@ -14,7 +14,15 @@ def get_database():
     
     # Use Streamlit's persistent storage
     db_path = os.path.join(st.session_state.get('data_dir', '.'), 'bitwise_leads.db')
-    return Database(db_path)
+    db = Database(db_path)
+    
+    # Verify enrichment data exists
+    with db.get_connection() as conn:
+        cursor = conn.execute("SELECT COUNT(*) FROM leads WHERE industry IS NOT NULL")
+        count = cursor.fetchone()[0]
+        st.sidebar.text(f"DB: {count} leads with industry data")
+    
+    return db
 
 # Ensure data directory exists in session state
 if 'data_dir' not in st.session_state:
