@@ -7,26 +7,21 @@ import sys
 import os
 
 # Streamlit Cloud compatible paths
-@st.cache_resource
 def get_database():
-    """Initialize database with Streamlit Cloud compatible path"""
+    """Initialize database - no caching to ensure fresh data"""
     from database import Database
     
     # Use Streamlit's persistent storage
     db_path = os.path.join(st.session_state.get('data_dir', '.'), 'bitwise_leads.db')
-    db = Database(db_path)
-    
-    # Verify enrichment data exists
-    with db.get_connection() as conn:
-        cursor = conn.execute("SELECT COUNT(*) FROM leads WHERE industry IS NOT NULL")
-        count = cursor.fetchone()[0]
-        st.sidebar.text(f"DB: {count} leads with industry data")
-    
-    return db
+    return Database(db_path)
 
 # Ensure data directory exists in session state
 if 'data_dir' not in st.session_state:
     st.session_state.data_dir = '.'
+
+# Check if we need to import data
+if 'data_imported' not in st.session_state:
+    st.session_state.data_imported = False
 
 # Page config
 st.set_page_config(
@@ -58,6 +53,29 @@ st.markdown("""
 
 # Initialize database
 db = get_database()
+
+# Import Chorus One data if not already done
+with st.spinner("Loading data..."):
+    leads = db.get_all_leads()
+    lead_count = len(leads)
+    
+    # Check if we have enrichment data
+    if leads:
+        sample_lead = leads[0]
+        has_enrichment = hasattr(sample_lead, 'industry') and sample_lead.industry
+    else:
+        has_enrichment = False
+    
+    if lead_count == 0:
+        st.sidebar.error("❌ No leads found in database!")
+    elif lead_count < 100:
+        st.sidebar.warning(f"⚠️ Only {lead_count} leads found")
+    else:
+        st.sidebar.success(f"✅ {lead_count} leads loaded")
+        if has_enrichment:
+            st.sidebar.info(f"📊 Industry data available")
+        else:
+            st.sidebar.warning(f"⚠️ No industry data found")
 
 # Helper functions
 def get_meddpicc_class(score):
