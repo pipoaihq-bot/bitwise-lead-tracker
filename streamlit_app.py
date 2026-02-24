@@ -343,6 +343,8 @@ if page == "📊 Dashboard":
     st.markdown("# Dashboard")
     st.markdown("### EMEA Lead Pipeline Overview")
     
+    df = load_leads_df()
+    
     if df.empty:
         st.info("📋 No leads in the system yet. Go to **📁 Import Data** to get started!")
     else:
@@ -418,11 +420,11 @@ if page == "📊 Dashboard":
 elif page == "📋 Pipeline":
     st.markdown("# Lead Pipeline")
     
+    df = load_leads_df()
+    
     if df.empty:
         st.info("📋 No leads available. Import data first.")
     else:
-        df = load_leads_df()
-        
         # Filters
         with st.expander("🔍 Filters", expanded=True):
             col1, col2, col3 = st.columns(3)
@@ -566,6 +568,8 @@ elif page == "📁 Import Data":
 # MEDDPICC PAGE
 elif page == "🎯 MEDDPICC":
     st.markdown("# MEDDPICC Scoring")
+    
+    df = load_leads_df()
     
     if df.empty:
         st.info("📋 No leads available.")
