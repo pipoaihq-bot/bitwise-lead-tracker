@@ -25,29 +25,90 @@ if 'data_imported' not in st.session_state:
 
 # Page config
 st.set_page_config(
-    page_title="Bitwise EMEA Lead Tracker",
-    page_icon="🎯",
+    page_title="Bitwise EMEA | Lead Tracker",
+    page_icon="🔷",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
-st.markdown("""
+# Bitwise Brand Colors
+BITWISE_TEAL = "#1a9c9c"
+BITWISE_DARK = "#0a2540"
+BITWISE_LIGHT = "#f6f9fc"
+
+# Custom CSS - Bitwise Branding
+st.markdown(f"""
 <style>
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: bold;
-        color: #1f77b4;
-    }
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        border-left: 4px solid #1f77b4;
-    }
-    .meddpicc-high { color: #2ecc71; font-weight: bold; }
-    .meddpicc-medium { color: #f39c12; font-weight: bold; }
-    .meddpicc-low { color: #e74c3c; font-weight: bold; }
+    /* Bitwise Brand Colors */
+    :root {{
+        --bitwise-teal: {BITWISE_TEAL};
+        --bitwise-dark: {BITWISE_DARK};
+        --bitwise-light: {BITWISE_LIGHT};
+    }}
+    
+    /* Main header with logo */
+    .main-header {{
+        font-size: 2.2rem;
+        font-weight: 600;
+        color: {BITWISE_DARK};
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }}
+    
+    /* Sidebar styling */
+    section[data-testid="stSidebar"] {{
+        background-color: {BITWISE_LIGHT};
+    }}
+    
+    section[data-testid="stSidebar"] .css-1d391kg {{
+        background-color: {BITWISE_LIGHT};
+    }}
+    
+    /* Metric cards */
+    .metric-card {{
+        background: linear-gradient(135deg, #ffffff 0%, {BITWISE_LIGHT} 100%);
+        padding: 1.5rem;
+        border-radius: 12px;
+        border-left: 4px solid {BITWISE_TEAL};
+        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }}
+    
+    /* MEDDPICC colors */
+    .meddpicc-high {{ color: #10b981; font-weight: 600; }}
+    .meddpicc-medium {{ color: #f59e0b; font-weight: 600; }}
+    .meddpicc-low {{ color: #ef4444; font-weight: 600; }}
+    
+    /* Button styling */
+    .stButton > button {{
+        background-color: {BITWISE_TEAL};
+        color: white;
+        border-radius: 6px;
+        border: none;
+        padding: 0.5rem 1.5rem;
+        font-weight: 500;
+    }}
+    
+    .stButton > button:hover {{
+        background-color: #158a8a;
+    }}
+    
+    /* Filter section */
+    .filter-header {{
+        color: {BITWISE_DARK};
+        font-weight: 600;
+        font-size: 1.1rem;
+        margin-bottom: 1rem;
+    }}
+    
+    /* DataFrame styling */
+    .stDataFrame {{
+        border-radius: 8px;
+    }}
+    
+    /* Subheader styling */
+    .stSubheader {{
+        color: {BITWISE_DARK};
+        font-weight: 600;
+    }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -133,15 +194,24 @@ def load_leads_df():
         })
     return pd.DataFrame(data)
 
-# Sidebar
-st.sidebar.markdown("## 🎯 Bitwise EMEA")
-st.sidebar.markdown("### Lead Tracker Dashboard")
+# Sidebar with Bitwise Branding
+st.sidebar.markdown("---")
+
+# Logo display
+try:
+    st.sidebar.image("assets/bitwise_logo.png", width=80)
+except:
+    st.sidebar.markdown("### 🔷 Bitwise")
+
+st.sidebar.markdown("## **EMEA Lead Tracker**")
+st.sidebar.markdown("*Onchain Solutions*")
 st.sidebar.markdown("---")
 
 # Navigation
 page = st.sidebar.radio(
     "Navigation",
-    ["📊 Dashboard", "📋 Lead Pipeline", "🎯 MEDDPICC Scoring", "➕ Add New Lead", "📝 Activities"]
+    ["📊 Dashboard", "📋 Lead Pipeline", "🎯 MEDDPICC Scoring", "➕ Add New Lead", "📝 Activities"],
+    label_visibility="collapsed"
 )
 
 # Load data
@@ -593,6 +663,15 @@ elif page == "📝 Activities":
 
 # Footer
 st.sidebar.markdown("---")
-st.sidebar.markdown("**Bitwise EMEA Lead Tracker v1.0**")
-st.sidebar.markdown("Head of Onchain Solutions")
-st.sidebar.markdown(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+try:
+    st.sidebar.image("assets/bitwise_wordmark.jpg", width=150)
+except:
+    st.sidebar.markdown("### Bitwise®")
+
+st.sidebar.markdown(f"""
+<small style="color: #666;">
+<strong>EMEA Onchain Solutions</strong><br>
+Lead Tracker v1.0<br>
+{lead_count:,} Prospects | {datetime.now().strftime('%Y-%m-%d')}
+</small>
+""", unsafe_allow_html=True)
