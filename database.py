@@ -331,7 +331,7 @@ class Database:
     
     # Helper methods
     def _row_to_lead(self, row) -> Lead:
-        return Lead(
+        lead = Lead(
             id=row['id'],
             company=row['company'],
             region=Region(row['region']),
@@ -349,6 +349,22 @@ class Database:
             created_at=datetime.fromisoformat(row['created_at']) if row['created_at'] else None,
             updated_at=datetime.fromisoformat(row['updated_at']) if row['updated_at'] else None
         )
+        
+        # Add enrichment fields if they exist
+        if 'industry' in row.keys():
+            lead.industry = row['industry']
+        if 'employee_count' in row.keys():
+            lead.employee_count = row['employee_count']
+        if 'company_type' in row.keys():
+            lead.company_type = row['company_type']
+        if 'staking_readiness' in row.keys():
+            lead.staking_readiness = row['staking_readiness']
+        if 'tech_stack' in row.keys():
+            lead.tech_stack = row['tech_stack']
+        if 'sub_region' in row.keys():
+            lead.sub_region = row['sub_region']
+        
+        return lead
     
     def _row_to_activity(self, row) -> Activity:
         return Activity(

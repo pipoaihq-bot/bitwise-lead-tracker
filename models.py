@@ -92,6 +92,16 @@ class Lead:
     created_at: datetime = None
     updated_at: datetime = None
     
+    # Enrichment fields (optional)
+    industry: Optional[str] = None
+    employee_count: Optional[str] = None
+    sub_region: Optional[str] = None
+    company_type: Optional[str] = None
+    funding_stage: Optional[str] = None
+    year_founded: Optional[int] = None
+    tech_stack: Optional[str] = None
+    staking_readiness: Optional[str] = None
+    
     def __post_init__(self):
         if self.created_at is None:
             self.created_at = datetime.now()
@@ -99,7 +109,7 @@ class Lead:
             self.updated_at = datetime.now()
     
     def to_dict(self):
-        return {
+        result = {
             'id': self.id,
             'company': self.company,
             'region': self.region.value if isinstance(self.region, Region) else self.region,
@@ -117,6 +127,26 @@ class Lead:
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
+        
+        # Add enrichment fields if they exist
+        if self.industry:
+            result['industry'] = self.industry
+        if self.employee_count:
+            result['employee_count'] = self.employee_count
+        if self.sub_region:
+            result['sub_region'] = self.sub_region
+        if self.company_type:
+            result['company_type'] = self.company_type
+        if self.funding_stage:
+            result['funding_stage'] = self.funding_stage
+        if self.year_founded:
+            result['year_founded'] = self.year_founded
+        if self.tech_stack:
+            result['tech_stack'] = self.tech_stack
+        if self.staking_readiness:
+            result['staking_readiness'] = self.staking_readiness
+            
+        return result
 
 @dataclass
 class Activity:
