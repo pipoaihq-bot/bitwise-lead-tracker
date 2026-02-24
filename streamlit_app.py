@@ -36,29 +36,38 @@ st.markdown("""
     
     /* Main container */
     .main {
-        background-color: #fafbfc;
+        background-color: #0d1f33;
+    }
+    
+    /* Main content area */
+    section[data-testid="stAppViewContainer"] {
+        background: linear-gradient(135deg, #0d1f33 0%, #0a2540 100%);
+    }
+    
+    .stApp {
+        background: linear-gradient(135deg, #0d1f33 0%, #0a2540 100%);
     }
     
     /* Headers */
     h1 {
-        color: #0a2540;
+        color: #ffffff;
         font-weight: 700;
         font-size: 2rem;
         margin-bottom: 0.5rem;
     }
     
     h2 {
-        color: #0a2540;
+        color: #e5e7eb;
         font-weight: 600;
         font-size: 1.5rem;
         margin-top: 2rem;
         margin-bottom: 1rem;
         padding-bottom: 0.5rem;
-        border-bottom: 2px solid #e5e7eb;
+        border-bottom: 1px solid rgba(255,255,255,0.1);
     }
     
     h3 {
-        color: #374151;
+        color: #a0c4c4;
         font-weight: 600;
         font-size: 1.1rem;
     }
@@ -122,24 +131,24 @@ st.markdown("""
         border-radius: 8px;
     }
     
-    /* Metric cards */
+    /* Metric cards - Dark theme */
     .metric-container {
-        background: white;
+        background: linear-gradient(135deg, #1a3a5c 0%, #0f2942 100%);
         border-radius: 12px;
         padding: 1.5rem;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        border: 1px solid #e5e7eb;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        border: 1px solid rgba(255,255,255,0.1);
     }
     
     .metric-value {
         font-size: 2rem;
         font-weight: 700;
-        color: #0a2540;
+        color: #ffffff;
     }
     
     .metric-label {
         font-size: 0.875rem;
-        color: #6b7280;
+        color: #a0c4c4;
         margin-top: 0.25rem;
     }
     
@@ -175,13 +184,14 @@ st.markdown("""
         border: 1px solid #e5e7eb;
     }
     
-    /* Upload box */
+    /* Upload box - Dark theme */
     .upload-box {
         border: 2px dashed #1a9c9c;
         border-radius: 12px;
         padding: 2rem;
         text-align: center;
-        background: #f0fdfa;
+        background: linear-gradient(135deg, #1a3a5c 0%, #0f2942 100%);
+        color: #e5e7eb;
     }
     
     /* Status badges */
@@ -213,29 +223,77 @@ st.markdown("""
     .meddpicc-medium { color: #d97706; font-weight: 600; }
     .meddpicc-low { color: #dc2626; font-weight: 600; }
     
-    /* Divider */
+    /* Divider - Dark theme */
     hr {
         border: none;
-        border-top: 1px solid #e5e7eb;
+        border-top: 1px solid rgba(255,255,255,0.1);
         margin: 2rem 0;
     }
     
-    /* Info boxes */
+    /* Info boxes - Dark theme */
     .info-box {
-        background-color: #f0fdfa;
+        background: linear-gradient(135deg, #1a3a5c 0%, #0f2942 100%);
         border-left: 4px solid #1a9c9c;
         padding: 1rem 1.5rem;
         border-radius: 8px;
         margin: 1rem 0;
+        color: #e5e7eb;
     }
     
-    /* Select boxes */
+    /* Expander - Dark theme */
+    .streamlit-expanderHeader {
+        background-color: rgba(26, 58, 92, 0.5) !important;
+        border-radius: 8px;
+        color: #e5e7eb !important;
+    }
+    
+    .streamlit-expanderContent {
+        background-color: rgba(26, 58, 92, 0.3) !important;
+        border-radius: 0 0 8px 8px;
+        color: #e5e7eb;
+    }
+    
+    /* DataFrames - Dark theme */
+    .stDataFrame {
+        border-radius: 12px;
+        background-color: #1a3a5c !important;
+    }
+    
+    .stDataFrame > div > div > div {
+        background-color: #1a3a5c !important;
+        color: #e5e7eb !important;
+    }
+    
+    /* Select boxes - Dark theme */
     .stSelectbox > div > div {
+        border-radius: 8px;
+        background-color: #1a3a5c !important;
+        color: #ffffff !important;
+    }
+    
+    /* Multiselect - Dark theme */
+    .stMultiSelect > div > div {
+        border-radius: 8px;
+        background-color: #1a3a5c !important;
+        color: #ffffff !important;
+    }
+    
+    /* Slider - Dark theme */
+    .stSlider > div > div > div {
+        background-color: #1a9c9c !important;
+    }
+    
+    /* Text input - Dark theme */
+    .stTextInput > div > div > input {
+        background-color: #1a3a5c !important;
+        color: #ffffff !important;
         border-radius: 8px;
     }
     
-    /* Multiselect */
-    .stMultiSelect > div > div {
+    /* Number input - Dark theme */
+    .stNumberInput > div > div > input {
+        background-color: #1a3a5c !important;
+        color: #ffffff !important;
         border-radius: 8px;
     }
 </style>
