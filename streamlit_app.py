@@ -61,7 +61,7 @@ def get_meddpicc_class(score):
         return "meddpicc-low"
 
 def load_leads_df():
-    """Load all leads as DataFrame"""
+    """Load all leads as DataFrame with enriched data"""
     from models import Region, Tier, Stage
     
     leads = db.get_all_leads()
@@ -71,10 +71,20 @@ def load_leads_df():
     data = []
     for lead in leads:
         meddpicc = db.get_meddpicc_score(lead.id)
+        
+        # Get enriched fields (may not exist in old leads)
+        industry = getattr(lead, 'industry', '') or ''
+        employee_count = getattr(lead, 'employee_count', '') or ''
+        company_type = getattr(lead, 'company_type', '') or ''
+        staking_readiness = getattr(lead, 'staking_readiness', '') or ''
+        tech_stack = getattr(lead, 'tech_stack', '') or ''
+        sub_region = getattr(lead, 'sub_region', '') or ''
+        
         data.append({
             'ID': lead.id,
             'Company': lead.company,
             'Region': lead.region.value if hasattr(lead.region, 'value') else lead.region,
+            'Sub Region': sub_region,
             'Tier': lead.tier.value if hasattr(lead.tier, 'value') else lead.tier,
             'AUM (M€)': lead.aum_estimate_millions,
             'Contact': lead.contact_person,
@@ -84,6 +94,11 @@ def load_leads_df():
             'Stage': lead.stage.value if hasattr(lead.stage, 'value') else lead.stage,
             'Deal Size (M€)': lead.expected_deal_size_millions,
             'Expected Yield %': lead.expected_yield,
+            'Industry': industry,
+            'Employee Count': employee_count,
+            'Company Type': company_type,
+            'Staking Readiness': staking_readiness,
+            'Tech Stack': tech_stack,
             'Pain Points': lead.pain_points,
             'Use Case': lead.use_case,
             'MEDDPICC Score': meddpicc.total_score if meddpicc else 0,
@@ -165,7 +180,39 @@ if page == "📊 Dashboard":
                             title="Pipeline Distribution by Region")
                 st.plotly_chart(fig, use_container_width=True)
         
-        # Charts Row 2
+        # Charts Row 2 - NEW: Industry breakdown
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("Leads by Industry")
+            if 'Industry' in df.columns:
+                industry_data = df[df['Industry'].notna()].groupby('Industry').agg({
+                    'ID': 'count'
+                }).reset_index()
+                industry_data.columns = ['Industry', 'Count']
+                industry_data = industry_data.sort_values('Count', ascending=False).head(10)
+                
+                if not industry_data.empty:
+                    fig = px.bar(industry_data, x='Industry', y='Count', 
+                                color='Industry', title="Top 10 Industries")
+                    st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            st.subheader("Staking Readiness")
+            if 'Staking Readiness' in df.columns:
+                readiness_data = df[df['Staking Readiness'].notna()].groupby('Staking Readiness').agg({
+                    'ID': 'count'
+                }).reset_index()
+                readiness_data.columns = ['Readiness', 'Count']
+                
+                if not readiness_data.empty:
+                    colors = {'High': '#2ecc71', 'Medium': '#f39c12', 'Low': '#e74c3c'}
+                    fig = px.pie(readiness_data, values='Count', names='Readiness',
+                                color='Readiness', color_discrete_map=colors,
+                                title="Staking Readiness Distribution")
+                    st.plotly_chart(fig, use_container_width=True)
+        
+        # Charts Row 3
         col1, col2 = st.columns(2)
         
         with col1:
@@ -200,8 +247,10 @@ if page == "📊 Dashboard":
         
         qualified = df[df['MEDDPICC Score'] >= 50].sort_values('Deal Size (M€)', ascending=False)
         if not qualified.empty:
-            st.dataframe(qualified[['Company', 'Region', 'Stage', 'Deal Size (M€)', 
-                                   'MEDDPICC Score', 'Qualification']].head(10),
+            display_cols = ['Company', 'Region', 'Industry', 'Stage', 'Deal Size (M€)', 
+                           'MEDDPICC Score', 'Staking Readiness', 'Qualification']
+            display_cols = [col for col in display_cols if col in qualified.columns]
+            st.dataframe(qualified[display_cols].head(10),
                         use_container_width=True)
         else:
             st.info("No qualified deals yet. Update MEDDPICC scores to qualify deals.")
@@ -214,32 +263,80 @@ elif page == "📋 Lead Pipeline":
     if df.empty:
         st.info("No leads in the system yet.")
     else:
-        # Filters
+        # Advanced Filters
+        st.subheader("🔍 Filters")
+        
         col1, col2, col3 = st.columns(3)
         
         with col1:
             region_filter = st.multiselect("Region", df['Region'].unique().tolist())
+            industry_filter = st.multiselect("Industry", 
+                                            df['Industry'].dropna().unique().tolist() if 'Industry' in df.columns else [])
+            stage_filter = st.multiselect("Stage", df['Stage'].unique().tolist())
         
         with col2:
-            stage_filter = st.multiselect("Stage", df['Stage'].unique().tolist())
+            tier_filter = st.multiselect("Tier", df['Tier'].unique().tolist())
+            employee_filter = st.multiselect("Employee Count", 
+                                            df['Employee Count'].dropna().unique().tolist() if 'Employee Count' in df.columns else [])
+            company_type_filter = st.multiselect("Company Type", 
+                                               df['Company Type'].dropna().unique().tolist() if 'Company Type' in df.columns else [])
         
         with col3:
             min_meddpicc = st.slider("Min MEDDPICC Score", 0, 80, 0)
+            staking_filter = st.multiselect("Staking Readiness", 
+                                          df['Staking Readiness'].dropna().unique().tolist() if 'Staking Readiness' in df.columns else [])
+            tech_filter = st.multiselect("Tech Stack", 
+                                       df['Tech Stack'].dropna().unique().tolist() if 'Tech Stack' in df.columns else [])
+        
+        # Search box
+        search_term = st.text_input("🔎 Search Companies", placeholder="Type company name...")
         
         # Apply filters
         filtered_df = df.copy()
+        
         if region_filter:
             filtered_df = filtered_df[filtered_df['Region'].isin(region_filter)]
+        if industry_filter:
+            filtered_df = filtered_df[filtered_df['Industry'].isin(industry_filter)]
         if stage_filter:
             filtered_df = filtered_df[filtered_df['Stage'].isin(stage_filter)]
+        if tier_filter:
+            filtered_df = filtered_df[filtered_df['Tier'].isin(tier_filter)]
+        if employee_filter:
+            filtered_df = filtered_df[filtered_df['Employee Count'].isin(employee_filter)]
+        if company_type_filter:
+            filtered_df = filtered_df[filtered_df['Company Type'].isin(company_type_filter)]
+        if staking_filter:
+            filtered_df = filtered_df[filtered_df['Staking Readiness'].isin(staking_filter)]
+        if tech_filter:
+            filtered_df = filtered_df[filtered_df['Tech Stack'].isin(tech_filter)]
         if min_meddpicc > 0:
             filtered_df = filtered_df[filtered_df['MEDDPICC Score'] >= min_meddpicc]
+        if search_term:
+            filtered_df = filtered_df[filtered_df['Company'].str.contains(search_term, case=False, na=False)]
         
-        st.markdown(f"**Showing {len(filtered_df)} leads**")
+        # Summary stats
+        st.markdown("---")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Filtered Leads", len(filtered_df))
+        with col2:
+            st.metric("Pipeline Value", f"€{filtered_df['Deal Size (M€)'].sum():.0f}M")
+        with col3:
+            high_readiness = len(filtered_df[filtered_df['Staking Readiness'] == 'High']) if 'Staking Readiness' in filtered_df.columns else 0
+            st.metric("High Readiness", high_readiness)
+        with col4:
+            qualified = len(filtered_df[filtered_df['MEDDPICC Score'] >= 50])
+            st.metric("Qualified", qualified)
+        
+        st.markdown("---")
         
         # Display leads table
-        display_cols = ['Company', 'Region', 'Tier', 'AUM (M€)', 'Contact', 'Title', 
-                       'Stage', 'Deal Size (M€)', 'MEDDPICC Score', 'Qualification']
+        display_cols = ['Company', 'Region', 'Industry', 'Tier', 'Stage', 'Deal Size (M€)', 
+                       'MEDDPICC Score', 'Staking Readiness', 'Qualification']
+        
+        # Only show columns that exist
+        display_cols = [col for col in display_cols if col in filtered_df.columns]
         
         display_df = filtered_df[display_cols].copy()
         
@@ -254,7 +351,6 @@ elif page == "📋 Lead Pipeline":
                     min_value=0,
                     max_value=80,
                 ),
-                'AUM (M€)': st.column_config.NumberColumn(format="€%.0fM"),
                 'Deal Size (M€)': st.column_config.NumberColumn(format="€%.0fM"),
             }
         )
