@@ -63,16 +63,30 @@ st.markdown("""
         font-size: 1.1rem;
     }
     
-    /* Sidebar */
+    /* Sidebar - Dark theme matching Bitwise branding */
     section[data-testid="stSidebar"] {
-        background-color: #ffffff;
-        border-right: 1px solid #e5e7eb;
+        background: linear-gradient(180deg, #0a2540 0%, #0d2d4d 100%);
+        border-right: none;
     }
     
     section[data-testid="stSidebar"] .block-container {
         padding-top: 2rem;
         padding-left: 1.5rem;
         padding-right: 1.5rem;
+        color: white;
+    }
+    
+    section[data-testid="stSidebar"] h3 {
+        color: #ffffff !important;
+        font-weight: 600;
+    }
+    
+    section[data-testid="stSidebar"] p {
+        color: #a0c4c4 !important;
+    }
+    
+    section[data-testid="stSidebar"] small {
+        color: #7aa0a0 !important;
     }
     
     /* Radio buttons in sidebar */
@@ -80,15 +94,32 @@ st.markdown("""
         background-color: transparent;
     }
     
+    .stRadio > label {
+        color: #e5e7eb !important;
+        font-weight: 500;
+    }
+    
     .stRadio > div > label {
+        color: #ffffff !important;
         padding: 0.75rem 1rem;
         margin: 0.25rem 0;
         border-radius: 8px;
         transition: all 0.2s;
+        cursor: pointer;
     }
     
     .stRadio > div > label:hover {
-        background-color: #f3f4f6;
+        background-color: rgba(26, 156, 156, 0.3);
+    }
+    
+    .stRadio > div[role="radiogroup"] > div[data-testid="stMarkdownContainer"] > p {
+        color: #ffffff !important;
+    }
+    
+    /* Selected radio item */
+    .stRadio > div[role="radiogroup"] > div:has(> input:checked) {
+        background-color: rgba(26, 156, 156, 0.5) !important;
+        border-radius: 8px;
     }
     
     /* Metric cards */
@@ -227,8 +258,8 @@ with st.sidebar:
     except:
         st.markdown("## 🔷")
     
-    st.markdown("### Bitwise")
-    st.markdown("**EMEA Onchain Solutions**")
+    st.markdown("<h3 style='color: white; margin-bottom: 0;'>Bitwise</h3>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #a0c4c4; margin-top: 0;'>EMEA Onchain Solutions</p>", unsafe_allow_html=True)
     st.markdown("---")
     
     # Navigation
@@ -241,16 +272,16 @@ with st.sidebar:
     st.markdown("---")
     
     # Data Status
-    st.markdown("**Data Status**")
+    st.markdown("<p style='color: white; font-weight: 600;'>Data Status</p>", unsafe_allow_html=True)
     if lead_count == 0:
-        st.error("❌ No leads")
+        st.markdown("<p style='color: #fca5a5;'>❌ No leads</p>", unsafe_allow_html=True)
     elif lead_count < 100:
-        st.warning(f"⚠️ {lead_count} leads")
+        st.markdown(f"<p style='color: #fcd34d;'>⚠️ {lead_count} leads</p>", unsafe_allow_html=True)
     else:
-        st.success(f"✅ {lead_count:,} leads")
+        st.markdown(f"<p style='color: #86efac;'>✅ {lead_count:,} leads</p>", unsafe_allow_html=True)
         
     if has_enrichment:
-        st.info("📊 Enriched")
+        st.markdown("<p style='color: #6ee7b7;'>📊 Enriched</p>", unsafe_allow_html=True)
     
     st.markdown("---")
     
@@ -258,9 +289,9 @@ with st.sidebar:
     try:
         st.image("assets/bitwise_wordmark.jpg", width=120)
     except:
-        st.markdown("**Bitwise®**")
+        st.markdown("<p style='color: white; font-weight: 600;'>Bitwise®</p>", unsafe_allow_html=True)
     
-    st.caption(f"v1.0 • {datetime.now().strftime('%Y-%m-%d')}")
+    st.markdown(f"<p style='color: #7aa0a0; font-size: 0.75rem;'>v1.0 • {datetime.now().strftime('%Y-%m-%d')}</p>", unsafe_allow_html=True)
 
 # ==================== HELPER FUNCTIONS ====================
 def get_meddpicc_class(score):
