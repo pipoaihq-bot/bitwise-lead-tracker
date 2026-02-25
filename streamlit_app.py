@@ -568,6 +568,208 @@ elif page == "Pipeline":
         )
 
 elif page == "Tasks":
+    st.markdown("# Tasks & Targets")
+    
+    stats_task = task_manager.get_stats()
+    
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Gesamt", stats_task['total'])
+    col2.metric("Offen", stats_task['todo'])
+    col3.metric("In Arbeit", stats_task['in_progress'])
+    col4.metric("Erledigt", stats_task['done'])
+    
+    st.markdown("---")
+    
+    with st.expander("Neue Task erstellen"):
+        col1, col2 = st.columns(2)
+        with col1:
+            title = st.text_input("Titel")
+            desc = st.text_area("Beschreibung")
+            company = st.text_input("Unternehmen (optional)")
+        with col2:
+            priority = st.selectbox("Priorität", ["P1", "P2", "P3", "P4"])
+            category = st.selectbox("Kategorie", ["UAE", "GERMANY", "SWITZERLAND", "UK", "OUTREACH", "CONTENT", "RESEARCH"])
+        
+        if st.button("Task erstellen", type="primary"):
+            from models import Task
+            task = Task(None, title, desc, "todo", priority, category, company if company else None)
+            task_manager.create_task(task)
+            st.success("Erstellt!")
+            st.rerun()
+    
+    tab1, tab2, tab3 = st.tabs(["Zu erledigen", "In Arbeit", "Erledigt"])
+    
+    with tab1:
+        for task in task_manager.get_tasks(status='todo'):
+            col1, col2, col3 = st.columns([0.05, 0.75, 0.2])
+            with col1:
+                if st.checkbox("", key=f"td_{task.id}", label_visibility="collapsed"):
+                    task_manager.update_task_status(task.id, 'done')
+                    st.rerun()
+            with col2:
+                priority_dot = {"P1": "🔴", "P2": "🟠", "P3": "🟡", "P4": "🟢"}
+                st.markdown(f"**{task.title}** {priority_dot.get(task.priority, '')}")
+                if task.description:
+                    st.caption(task.description)
+                if task.target_company:
+                    st.caption(f"🏢 {task.target_company}")
+            with col3:
+                if st.button("Starten", key=f"start_{task.id}"):
+                    task_manager.update_task_status(task.id, 'in_progress')
+                    st.rerun()
+    
+    with tab2:
+        for task in task_manager.get_tasks(status='in_progress'):
+            col1, col2, col3 = st.columns([0.05, 0.75, 0.2])
+            with col1:
+                if st.checkbox("", key=f"ip_{task.id}", label_visibility="collapsed"):
+                    task_manager.update_task_status(task.id, 'done')
+                    st.rerun()
+            with col2:
+                st.markdown(f"⚡ **{task.title}**")
+            with col3:
+                if st.button("Pausieren", key=f"pause_{task.id}"):
+                    task_manager.update_task_status(task.id, 'todo')
+                    st.rerun()
+    
+    with tab3:
+        tasks = task_manager.get_tasks(status='done')
+        st.success(f"{len(tasks)} erledigt")
+        for task in tasks:
+            st.markdown(f"✅ ~~{task.title}~~")
+
+elif page == "Import":
+    st.markdown("# Import")
+    st.info("CSV mit Chorus One Prospects hochladen")
+    
+    uploaded = st.file_uploader("CSV auswählen", type=['csv'])
+    if uploaded:
+        df_import = pd.read_csv(uploaded)
+        st.write(f"{len(df_import)} Zeilen gefunden")
+        st.dataframe(df_import.head(), use_container_width=True)
+        
+        if st.button("Importieren", type="primary"):
+            count = 0
+            for _, row in df_import.iterrows():
+                try:
+                    lead = Lead(
+                        id=None,
+                        company=str(row.get('Account Name', '')),
+                        region=Region('DE'),
+                        tier=Tier(2),
+                        aum_estimate_millions=0,
+                        contact_person='',
+                        title='',
+                        email=None,
+                        linkedin=str(row.get('LinkedIn', '')) if pd.notna(row.get('LinkedIn')) else None,
+                        stage=Stage.PROSPECTING,
+                        pain_points=str(row.get('Account Type', '')),
+                        expected_deal_size_millions=0,
+                        expected_yield=0
+                    )
+                    lid = db.create_lead(lead)
+                    db.set_meddpicc_score(lid, MEDDPICCScore(lead_id=lid))
+                    count += 1
+                except:
+                    pass
+            st.success(f"{count} Leads importiert!")
+
+elif page == "MEDDPICC":
+    st.markdown("# MEDDPICC Scoring")
+    
+    if df.empty:
+        st.info("Keine Leads verfügbar.")
+    else:
+        company = st.selectbox("Unternehmen auswählen", df['Company'].tolist())
+        
+        if company:
+            lead_row = df[df['Company'] == company].iloc[0]
+            current = db.get_meddpicc_score(lead_row['ID'])
+            
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                st.markdown("### Elemente bewerten")
+                
+                cols = st.columns(2)
+                with cols[0]:
+                    metrics = st.slider("Metrics", 0, 10, current.metrics if current else 0)
+                    economic = st.slider("Economic Buyer", 0, 10, current.economic_buyer if current else 0)
+                    process = st.slider("Decision Process", 0, 10, current.decision_process if current else 0)
+                    criteria = st.slider("Decision Criteria", 0, 10, current.decision_criteria if current else 0)
+                with cols[1]:
+                    paper = st.slider("Paper Process", 0, 10, current.paper_process if current else 0)
+                    pain = st.slider("Pain", 0, 10, current.pain if current else 0)
+                    champion = st.slider("Champion", 0, 10, current.champion if current else 0)
+                    competition = st.slider("Competition", 0, 10, current.competition if current else 0)
+                
+                total = metrics + economic + process + criteria + paper + pain + champion + competition
+                status = "QUALIFIED" if total >= 70 else "PROBABLE" if total >= 50 else "POSSIBLE" if total >= 30 else "UNQUALIFIED"
+                
+                if st.button("Speichern", type="primary"):
+                    new_score = MEDDPICCScore(
+                        lead_id=lead_row['ID'], metrics=metrics, economic_buyer=economic,
+                        decision_process=process, decision_criteria=criteria,
+                        paper_process=paper, pain=pain, champion=champion, competition=competition
+                    )
+                    db.set_meddpicc_score(lead_row['ID'], new_score)
+                    st.success(f"Gespeichert! {total}/80 ({status})")
+            
+            with col2:
+                st.markdown("### Ergebnis")
+                
+                fig = go.Figure(go.Indicator(
+                    mode="gauge+number", 
+                    value=total,
+                    domain={'x': [0, 1], 'y': [0, 1]},
+                    title={'text': f"MEDDPICC<br><span style='font-size:0.7em; color:#666'>{status}</span>"},
+                    gauge={
+                        'axis': {'range': [None, 80]}, 
+                        'bar': {'color': "#2563eb"},
+                        'steps': [
+                            {'range': [0, 30], 'color': "#f3f4f6"}, 
+                            {'range': [30, 50], 'color': "#fee2e2"},
+                            {'range': [50, 70], 'color': "#dbeafe"}, 
+                            {'range': [70, 80], 'color': "#dcfce7"}
+                        ]
+                    }
+                ))
+                fig.update_layout(
+                    height=250, 
+                    paper_bgcolor='rgba(0,0,0,0)', 
+                    font_color='#525252',
+                    margin=dict(t=40, b=20, l=20, r=20)
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+elif page == "Neuer Lead":
+    st.markdown("# Neuer Lead")
+    
+    with st.form("add_lead"):
+        col1, col2 = st.columns(2)
+        with col1:
+            company = st.text_input("Unternehmen *")
+            region = st.selectbox("Region", ['DE', 'CH', 'UK', 'UAE'])
+            contact = st.text_input("Kontakt Name")
+        with col2:
+            title = st.text_input("Titel")
+            linkedin = st.text_input("LinkedIn URL")
+            stage = st.selectbox("Stage", ['prospecting', 'discovery', 'solutioning', 'validation'])
+        
+        if st.form_submit_button("Lead erstellen", type="primary"):
+            if company:
+                lead = Lead(
+                    id=None, company=company, region=Region(region), tier=Tier(2),
+                    aum_estimate_millions=0, contact_person=contact, title=title,
+                    linkedin=linkedin if linkedin else None, stage=Stage(stage)
+                )
+                lid = db.create_lead(lead)
+                db.set_meddpicc_score(lid, MEDDPICCScore(lead_id=lid))
+                st.success(f"Erstellt: {company}")
+            else:
+                st.error("Unternehmen ist erforderlich")
+
+elif page == "Tasks":
     st.markdown("# Tasks")
     
     stats_task = task_manager.get_stats()
