@@ -302,6 +302,16 @@ st.markdown("""
 # Initialize database
 db = get_database()
 
+# Initialize task manager
+from task_manager import TaskManager, populate_default_tasks
+task_manager = TaskManager()
+
+# Populate default tasks if empty
+with task_manager.get_connection() as conn:
+    count = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+    if count == 0:
+        populate_default_tasks()
+
 # Check data status
 leads = db.get_all_leads()
 lead_count = len(leads)
@@ -323,7 +333,7 @@ with st.sidebar:
     # Navigation
     page = st.radio(
         "",
-        ["📊 Dashboard", "📋 Pipeline", "📁 Import Data", "🎯 MEDDPICC", "➕ Add Lead"],
+        ["📊 Dashboard", "📋 Pipeline", "🎯 Tasks & Targets", "📁 Import Data", "🎯 MEDDPICC", "➕ Add Lead"],
         label_visibility="collapsed"
     )
     
