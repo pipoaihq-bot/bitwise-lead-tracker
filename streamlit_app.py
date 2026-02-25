@@ -302,8 +302,8 @@ if page == "📊 Dashboard":
             st.markdown("### MEDDPICC Distribution")
             score_data = df.groupby(pd.cut(df['MEDDPICC'], bins=[0, 30, 50, 70, 80], labels=['Low', 'Medium', 'High', 'Qualified'])).size().reset_index(name='Count')
             score_data = score_data[score_data['Count'] > 0]
-            fig = px.bar(score_data, x='MEDDPICC', y='Count', color='MEDDPICC',
-                        color_discrete_sequence=['#dc2626', '#ea580c', '#14b8a6', '#16a34a'])
+            colors = ['#dc2626', '#ea580c', '#14b8a6', '#16a34a']
+            fig = px.bar(score_data, x='MEDDPICC', y='Count', color='MEDDPICC', color_discrete_sequence=colors)
             fig.update_layout(height=300, paper_bgcolor='rgba(0,0,0,0)', font_color='#e2e8f0', showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
 
