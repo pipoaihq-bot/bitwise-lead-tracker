@@ -1,14 +1,14 @@
 """
-StakeStream Command Center v7
+StakeStream Command Center v8
 Bitwise EMEA | Lead Tracker
-Supabase Cloud DB — Mobile-first, kein Tunnel, kein VPN
+Features: Pipo Chat, Lead Detail, Kanban, Search, Bulk Actions
 """
 
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import os
+import os, json
 from datetime import datetime
 
 # ── Page Config ────────────────────────────────────────────────────────────────
@@ -250,7 +250,47 @@ def load_tasks():
     try:
         resp = sb.table("tasks").select("*").order("created_at", desc=True).execute()
         return pd.DataFrame(resp.data) if resp.data else pd.DataFrame()
-    except: return pd.DataFrame()
+    except:
+        return pd.DataFrame()
+
+def pipo_chat(messages, df_stats):
+    """Send message to Claude API as Pipo with Bitwise context."""
+    try:
+        import anthropic
+        api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            return "⚠️ ANTHROPIC_API_KEY nicht gesetzt. Bitte in Streamlit Cloud → Secrets hinzufügen."
+        client = anthropic.Anthropic(api_key=api_key)
+        system = f"""Du bist Pipo, der autonome Pre-Sales Chief of Staff von Philipp Sandor (HEAD of EMEA, Bitwise Asset Management, Dubai).
+
+BITWISE FAKTEN (für Pitches):
+- $15B+ AUM weltweit | 40+ Produkte | 4.000+ institutionelle Clients | Est. 2017
+- Bitwise Onchain Solutions (ETH Staking): ~$5B gestaked | ZERO Slashings seit Genesis | 99.984% Uptime 2025
+- Staking APR: 3.170% vs Benchmark 3.015% (+0.155% Outperformance)
+- MiCA-konform | Institutional Reporting | Custody-Integration
+
+LIVE DATENBANK (heute):
+- Gesamt Leads: {df_stats.get('total', '?'):,}
+- Qualifiziert (MEDDPICC≥60): {df_stats.get('qualified', '?')}
+- Pipeline: €{df_stats.get('pipeline', 0):.0f}M
+- Inaktiv >7 Tage: {df_stats.get('stale', '?')}
+- Q1 Ziel: €500M Pipeline (aktuell: ~28%)
+
+PHILIPPS FOKUS: ETH Staking für institutionelle EMEA-Kunden (DE > CH > UAE > UK > NORDICS)
+
+Antworte präzise, datenbasiert, kein Smalltalk. Auf Deutsch. Max. 300 Wörter außer bei Email-Drafts."""
+
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            system=system,
+            messages=messages
+        )
+        return resp.content[0].text
+    except ImportError:
+        return "⚠️ 'anthropic' Package fehlt. Bitte requirements.txt updaten."
+    except Exception as e:
+        return f"⚠️ Fehler: {str(e)[:200]}"
 
 # ── Load ───────────────────────────────────────────────────────────────────────
 if not sb:
@@ -292,9 +332,9 @@ with st.sidebar:
     st.markdown(f"<div style='font-size:0.6rem;color:#1e3050;text-transform:uppercase;letter-spacing:0.08em;margin-top:0.5rem;'>Supabase Cloud · {datetime.now().strftime('%d.%m %H:%M')}</div>", unsafe_allow_html=True)
 
 # ── Navigation ─────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "🏠 Dashboard", "🚨 Prioritäten", "📊 Pipeline",
-    "✅ Tasks", "📥 Import", "⚙️ MEDDPICC", "➕ Neuer Lead"
+    "✅ Tasks", "📥 Import", "⚙️ MEDDPICC", "➕ Neuer Lead", "🤖 Pipo"
 ])
 
 # ══════════════════════════════════════════════════════════════
@@ -435,55 +475,216 @@ with tab2:
                 </div>""", unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════
-# TAB 3: PIPELINE
+# TAB 3: PIPELINE (Search + Kanban + Lead Detail)
 # ══════════════════════════════════════════════════════════════
 with tab3:
-    st.markdown("# 📊 Pipeline")
     if df.empty:
         st.info("Keine Daten.")
     else:
-        c1, c2 = st.columns(2)
-        with c1:
-            sel_region = st.selectbox("Region", ["Alle"] + sorted(df["region"].unique().tolist()))
-        with c2:
-            sel_stage = st.selectbox("Stage", ["Alle"] + sorted(df["stage"].unique().tolist()))
-        c3, c4 = st.columns(2)
-        with c3:
-            min_medd = st.slider("Min. MEDDPICC", 0, 80, 0)
-        with c4:
-            act_filter = st.selectbox("Aktivität", ["Alle","Aktiv (<3T)","Warm (3-7T)","Inaktiv (>7T)"])
+        # ── Global Search ──────────────────────────────────────
+        search_q = st.text_input("🔍 Suche nach Firma, Kontakt, Industrie, Region...",
+                                  placeholder="z.B. Deutsche Bank, Asset Management, UAE, C-Suite...",
+                                  key="pipeline_search")
 
+        # ── Filters Row ────────────────────────────────────────
+        with st.expander("⚙️ Filter", expanded=False):
+            fc1, fc2, fc3, fc4 = st.columns(4)
+            with fc1: sel_region = st.selectbox("Region", ["Alle"] + sorted(df["region"].dropna().unique().tolist()))
+            with fc2: sel_stage  = st.selectbox("Stage",  ["Alle"] + sorted(df["stage"].dropna().unique().tolist()))
+            with fc3: sel_tier   = st.selectbox("Tier",   ["Alle", "1", "2", "3"])
+            with fc4: act_filter = st.selectbox("Aktivität", ["Alle","Aktiv (<3T)","Warm (3-7T)","Inaktiv (>7T)"])
+            min_medd = st.slider("Min. MEDDPICC Score", 0, 80, 0)
+
+        # ── Apply Filters ──────────────────────────────────────
         filt = df.copy()
+        if search_q:
+            q = search_q.lower()
+            filt = filt[
+                filt["company"].str.lower().str.contains(q, na=False) |
+                filt["contact_person"].str.lower().str.contains(q, na=False) |
+                filt["industry"].str.lower().str.contains(q, na=False) |
+                filt["region"].str.lower().str.contains(q, na=False) |
+                filt["title"].str.lower().str.contains(q, na=False)
+            ]
         if sel_region != "Alle": filt = filt[filt["region"] == sel_region]
-        if sel_stage != "Alle": filt = filt[filt["stage"] == sel_stage]
-        if min_medd > 0: filt = filt[filt["meddpicc"] >= min_medd]
-        if act_filter == "Aktiv (<3T)": filt = filt[filt["days_inactive"] < 3]
+        if sel_stage  != "Alle": filt = filt[filt["stage"]  == sel_stage]
+        if sel_tier   != "Alle": filt = filt[filt["tier"]   == int(sel_tier)]
+        if min_medd   >  0:      filt = filt[filt["meddpicc"] >= min_medd]
+        if act_filter == "Aktiv (<3T)":   filt = filt[filt["days_inactive"] < 3]
         elif act_filter == "Warm (3-7T)": filt = filt[(filt["days_inactive"] >= 3) & (filt["days_inactive"] <= 7)]
         elif act_filter == "Inaktiv (>7T)": filt = filt[filt["days_inactive"] > 7]
 
-        st.markdown(f"**{len(filt):,} Leads** | Pipeline: **€{filt['deal_size'].sum():.0f}M**")
-        st.markdown("---")
+        # ── Stats Bar ──────────────────────────────────────────
+        m1, m2, m3, m4 = st.columns(4)
+        m1.markdown(f"<div class='metric-card'><div class='metric-val' style='color:#22c55e;'>{len(filt):,}</div><div class='metric-lbl'>Leads</div></div>", unsafe_allow_html=True)
+        m2.markdown(f"<div class='metric-card purple'><div class='metric-val' style='color:#6366f1;'>{len(filt[filt['tier']==1])}</div><div class='metric-lbl'>Tier 1</div></div>", unsafe_allow_html=True)
+        m3.markdown(f"<div class='metric-card'><div class='metric-val' style='color:#22c55e;'>€{filt['deal_size'].sum():.0f}M</div><div class='metric-lbl'>Pipeline</div></div>", unsafe_allow_html=True)
+        m4.markdown(f"<div class='metric-card'><div class='metric-val' style='color:#d4a660;'>{len(filt[filt['days_inactive']>7])}</div><div class='metric-lbl'>Inaktiv >7T</div></div>", unsafe_allow_html=True)
 
-        for _, r in filt.head(50).iterrows():
-            _, qc = qualify(int(r["meddpicc"]))
-            li = f"<a href='{r['linkedin']}' target='_blank' style='color:#3b82f6;font-size:0.75rem;'>LinkedIn →</a>" if r.get("linkedin") else ""
-            st.markdown(f"""
-            <div class="lead-row">
-                <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-                    <div>
-                        <div class="lead-company">{r['company']}</div>
-                        <div class="lead-meta">{r.get('contact_person') or ''}{' | ' if r.get('contact_person') else ''}{r.get('title') or ''}</div>
-                        <div class="lead-meta">{r['region']} • {r['industry']} • {r['stage']} {li}</div>
-                    </div>
-                    <div style="text-align:right;">
-                        <span class="score-badge {qc}">{int(r['meddpicc'])}/80</span><br>
-                        <span style="display:inline-block;margin-top:0.25rem;">{activity_pill(int(r['days_inactive']))}</span>
-                    </div>
-                </div>
-            </div>""", unsafe_allow_html=True)
+        st.markdown("<div style='margin:0.75rem 0;'></div>", unsafe_allow_html=True)
 
-        if len(filt) > 50:
-            st.caption(f"... {len(filt)-50} weitere. Filter nutzen zum Einschränken.")
+        # ── View Toggle: List / Kanban ──────────────────────────
+        view_mode = st.radio("Ansicht", ["📋 Liste", "🗂️ Kanban"], horizontal=True, label_visibility="collapsed")
+
+        if view_mode == "🗂️ Kanban":
+            # ── KANBAN BOARD ───────────────────────────────────
+            st.markdown("<div style='margin-top:0.75rem;'></div>", unsafe_allow_html=True)
+            stages = ["prospecting","discovery","solutioning","validation","negotiation","closed_won"]
+            stage_labels = {"prospecting":"Prospecting","discovery":"Discovery","solutioning":"Solutioning",
+                           "validation":"Validation","negotiation":"Negotiation","closed_won":"Closed Won"}
+            stage_colors = {"prospecting":"#22c55e","discovery":"#6366f1","solutioning":"#06b6d4",
+                           "validation":"#d4a660","negotiation":"#f87171","closed_won":"#22c55e"}
+            cols = st.columns(len(stages))
+            for i, stage in enumerate(stages):
+                with cols[i]:
+                    stage_leads = filt[filt["stage"] == stage]
+                    cnt = len(stage_leads)
+                    pipe = stage_leads["deal_size"].sum()
+                    color = stage_colors[stage]
+                    st.markdown(f"""
+                    <div style='border-top:2px solid {color};background:#0a1624;border-radius:4px;
+                                padding:0.6rem 0.5rem;margin-bottom:0.5rem;text-align:center;'>
+                        <div style='font-size:0.65rem;color:#4a6080;text-transform:uppercase;letter-spacing:0.1em;'>{stage_labels[stage]}</div>
+                        <div style='font-size:1.1rem;font-weight:600;color:#fff;margin-top:2px;'>{cnt}</div>
+                        <div style='font-size:0.65rem;color:{color};'>€{pipe:.0f}M</div>
+                    </div>""", unsafe_allow_html=True)
+                    for _, r in stage_leads.head(8).iterrows():
+                        _, qc = qualify(int(r["meddpicc"]))
+                        t_color = "#22c55e" if r["tier"]==1 else "#6366f1" if r["tier"]==2 else "#334155"
+                        st.markdown(f"""
+                        <div style='background:#0f1c2e;border:1px solid rgba(255,255,255,0.06);
+                                    border-left:2px solid {t_color};border-radius:3px;
+                                    padding:0.5rem 0.6rem;margin-bottom:0.375rem;'>
+                            <div style='font-size:0.78rem;font-weight:600;color:#e8f0ff;white-space:nowrap;
+                                        overflow:hidden;text-overflow:ellipsis;'>{r['company'][:22]}</div>
+                            <div style='font-size:0.65rem;color:#4a6080;margin-top:2px;'>
+                                {r['region']} · T{int(r['tier']) if r.get('tier') else '?'}
+                            </div>
+                            <div style='margin-top:4px;'>
+                                <span class='score-badge {qc}' style='font-size:0.6rem;'>{int(r['meddpicc'])}</span>
+                            </div>
+                        </div>""", unsafe_allow_html=True)
+                    if cnt > 8:
+                        st.markdown(f"<div style='font-size:0.65rem;color:#4a6080;text-align:center;'>+{cnt-8} weitere</div>", unsafe_allow_html=True)
+        else:
+            # ── LIST VIEW ──────────────────────────────────────
+            # Lead Detail State
+            if "selected_lead_id" not in st.session_state:
+                st.session_state.selected_lead_id = None
+
+            for _, r in filt.head(100).iterrows():
+                _, qc = qualify(int(r["meddpicc"]))
+                t_color = "#22c55e" if r.get("tier")==1 else "#6366f1" if r.get("tier")==2 else "#334155"
+                li = f"<a href='{r['linkedin']}' target='_blank' style='color:#6366f1;font-size:0.7rem;margin-left:6px;'>↗ LinkedIn</a>" if r.get("linkedin") else ""
+                em = f"<a href='mailto:{r['email']}' style='color:#22c55e;font-size:0.7rem;margin-left:6px;'>✉ Email</a>" if r.get("email") else ""
+
+                col_lead, col_btn = st.columns([10, 1])
+                with col_lead:
+                    st.markdown(f"""
+                    <div class="lead-row tier{int(r.get('tier',3))}">
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
+                            <div style="flex:1;min-width:0;">
+                                <div class="lead-company">{r['company']}</div>
+                                <div class="lead-meta">
+                                    {r.get('contact_person') or '—'} · {r.get('title') or ''}{li}{em}
+                                </div>
+                                <div class="lead-meta" style="margin-top:3px;">
+                                    <span class='pill pill-blue' style='font-size:0.6rem;'>{r['region']}</span>
+                                    <span style='margin:0 4px;color:#1e3050;'>·</span>
+                                    {r.get('industry') or ''}
+                                    <span style='margin:0 4px;color:#1e3050;'>·</span>
+                                    {r['stage']}
+                                </div>
+                            </div>
+                            <div style="text-align:right;flex-shrink:0;">
+                                <span class="score-badge {qc}">{int(r['meddpicc'])}/80</span><br>
+                                <span style="display:inline-block;margin-top:3px;">{activity_pill(int(r['days_inactive']))}</span>
+                            </div>
+                        </div>
+                    </div>""", unsafe_allow_html=True)
+                with col_btn:
+                    if st.button("▼", key=f"detail_{r['id']}", help="Details anzeigen"):
+                        if st.session_state.selected_lead_id == r["id"]:
+                            st.session_state.selected_lead_id = None
+                        else:
+                            st.session_state.selected_lead_id = r["id"]
+
+                # ── LEAD DETAIL CARD ──────────────────────────
+                if st.session_state.selected_lead_id == r["id"]:
+                    with st.container():
+                        st.markdown(f"""
+                        <div style='background:#071120;border:1px solid rgba(34,197,94,0.2);
+                                    border-left:3px solid #22c55e;border-radius:4px;
+                                    padding:1.25rem 1.25rem 0.75rem;margin:-0.25rem 0 0.75rem 0;'>
+                            <div style='font-size:0.6rem;color:#22c55e;text-transform:uppercase;
+                                        letter-spacing:0.15em;margin-bottom:0.75rem;'>
+                                ■ LEAD DETAIL — {r['company'].upper()}
+                            </div>
+                        </div>""", unsafe_allow_html=True)
+
+                        d1, d2, d3 = st.columns(3)
+                        with d1:
+                            st.markdown("**Kontakt**")
+                            st.markdown(f"👤 {r.get('contact_person') or '—'}")
+                            st.markdown(f"💼 {r.get('title') or '—'}")
+                            if r.get("email"):
+                                st.markdown(f"✉️ {r['email']}")
+                            if r.get("linkedin"):
+                                st.markdown(f"[↗ LinkedIn]({r['linkedin']})")
+                        with d2:
+                            st.markdown("**Deal Info**")
+                            st.markdown(f"📍 {r['region']} · {r.get('sub_region') or '—'}")
+                            st.markdown(f"🏢 {r.get('industry') or '—'} · Tier {int(r.get('tier',3))}")
+                            st.markdown(f"📊 Stage: **{r['stage']}**")
+                            st.markdown(f"💰 €{float(r.get('deal_size') or 0):.1f}M")
+                        with d3:
+                            st.markdown("**MEDDPICC**")
+                            total_m = int(r["meddpicc"])
+                            ql_m, qc_m = qualify(total_m)
+                            fig_m = go.Figure(go.Indicator(
+                                mode="gauge+number", value=total_m,
+                                number={"font":{"color":"#22c55e","size":28}},
+                                gauge={"axis":{"range":[0,80],"tickcolor":"#4a6080"},
+                                       "bar":{"color":"#22c55e"},"bgcolor":"#0a1624",
+                                       "steps":[{"range":[0,30],"color":"#071120"},
+                                                {"range":[30,50],"color":"#1c1917"},
+                                                {"range":[50,64],"color":"#1e1b4b"},
+                                                {"range":[64,80],"color":"#052e16"}]}))
+                            fig_m.update_layout(height=140, paper_bgcolor="rgba(0,0,0,0)",
+                                              font_color="#d4dbe8", margin=dict(t=20,b=5,l=5,r=5))
+                            st.plotly_chart(fig_m, use_container_width=True)
+
+                        if r.get("pain_points") or r.get("use_case"):
+                            st.markdown("**Notizen**")
+                            if r.get("use_case"): st.caption(f"Use Case: {r['use_case']}")
+                            if r.get("pain_points"): st.caption(f"Pain Points: {r['pain_points']}")
+
+                        st.markdown("<div style='margin-top:0.5rem;'></div>", unsafe_allow_html=True)
+                        ea1, ea2, ea3, ea4 = st.columns(4)
+                        with ea1:
+                            new_stage = st.selectbox("Stage ändern", ["—","prospecting","discovery","solutioning","validation","negotiation","closed_won","closed_lost"],
+                                                     key=f"stg_{r['id']}")
+                        with ea2:
+                            new_notes = st.text_input("Notiz hinzufügen", key=f"note_{r['id']}", placeholder="z.B. Call gebucht...")
+                        with ea3:
+                            new_deal = st.number_input("Deal Size (Mio €)", min_value=0.0, value=float(r.get("deal_size") or 0), key=f"ds_{r['id']}")
+                        with ea4:
+                            st.markdown("<div style='margin-top:1.7rem;'></div>", unsafe_allow_html=True)
+                            if st.button("💾 Update", key=f"save_{r['id']}", type="primary") and sb:
+                                try:
+                                    upd = {"updated_at": datetime.now().isoformat()}
+                                    if new_stage != "—": upd["stage"] = new_stage
+                                    if new_notes: upd["use_case"] = (r.get("use_case") or "") + f"\n[{datetime.now().strftime('%d.%m')}] {new_notes}"
+                                    if new_deal != float(r.get("deal_size") or 0): upd["expected_deal_size_millions"] = new_deal
+                                    sb.table("leads").update(upd).eq("id", int(r["id"])).execute()
+                                    st.success("✅ Gespeichert!")
+                                    st.cache_data.clear(); st.rerun()
+                                except Exception as e:
+                                    st.error(f"Fehler: {e}")
+                        st.markdown("---")
+
+            if len(filt) > 100:
+                st.caption(f"Zeige 100 von {len(filt):,} Leads. Filter oder Suche nutzen.")
 
 # ══════════════════════════════════════════════════════════════
 # TAB 4: TASKS
@@ -752,3 +953,132 @@ with tab7:
                     st.error(f"Fehler: {e}")
             else:
                 st.error("Unternehmen ist erforderlich")
+
+# ══════════════════════════════════════════════════════════════
+# TAB 8: PIPO CHAT
+# ══════════════════════════════════════════════════════════════
+with tab8:
+    st.markdown("""
+    <div class='bw-header'>
+        <div>
+            <div class='bw-logo'><span>■</span> Pipo</div>
+            <div class='bw-subtitle'>Dein autonomer Pre-Sales Chief of Staff</div>
+        </div>
+        <div class='bw-date'>
+            <span style='color:#22c55e;font-size:0.75rem;'>● Claude-Haiku</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Quick Action Prompts ──────────────────────────────────
+    st.markdown("<div style='margin-bottom:0.75rem;font-size:0.7rem;color:#4a6080;text-transform:uppercase;letter-spacing:0.1em;'>Quick Actions</div>", unsafe_allow_html=True)
+    qa_cols = st.columns(4)
+    quick_actions = [
+        ("🎯 Top 5 Leads heute", "Welche 5 Leads sollte ich heute zuerst kontaktieren? Begründe kurz mit MEDDPICC und Inaktivität."),
+        ("✉️ Email-Draft DE", "Schreib mir einen kurzen Cold-Email-Draft auf Deutsch für einen deutschen Asset Manager mit >1B AUM, der ETH noch nicht stakt. Spezifisch, kein Buzzword-Bingo."),
+        ("📊 Pipeline-Check", "Wie sieht meine aktuelle Pipeline aus? Was sind die größten Risiken und wo muss ich diese Woche handeln?"),
+        ("⚔️ Einwand-Coaching", "Ich habe gleich ein Call mit einem Prospect der sagt 'Wir machen Staking lieber selbst in-house'. Wie antworte ich als Bitwise BOS?"),
+    ]
+    for i, (label, prompt) in enumerate(quick_actions):
+        with qa_cols[i]:
+            if st.button(label, key=f"qa_{i}", use_container_width=True):
+                st.session_state.pipo_input = prompt
+
+    st.markdown("<div style='margin:0.75rem 0;'></div>", unsafe_allow_html=True)
+
+    # ── Chat History ──────────────────────────────────────────
+    if "pipo_messages" not in st.session_state:
+        st.session_state.pipo_messages = []
+
+    # Display chat history
+    chat_container = st.container()
+    with chat_container:
+        if not st.session_state.pipo_messages:
+            st.markdown("""
+            <div style='background:#0f1c2e;border:1px solid rgba(255,255,255,0.06);border-radius:8px;
+                        padding:1.5rem;text-align:center;color:#4a6080;margin-bottom:1rem;'>
+                <div style='font-family:Cormorant Garamond,serif;font-size:1.1rem;color:#6b8ab0;font-style:italic;margin-bottom:0.5rem;'>
+                    Bereit für deinen nächsten Deal.
+                </div>
+                <div style='font-size:0.75rem;'>
+                    Frag mich zu Leads, Email-Drafts, Einwand-Coaching oder Pipeline-Strategie.
+                </div>
+            </div>""", unsafe_allow_html=True)
+        else:
+            for msg in st.session_state.pipo_messages:
+                role = msg["role"]
+                content = msg["content"]
+                if role == "user":
+                    st.markdown(f"""
+                    <div style='display:flex;justify-content:flex-end;margin-bottom:0.75rem;'>
+                        <div style='background:#0c1a3a;border:1px solid rgba(99,102,241,0.25);border-radius:8px 8px 2px 8px;
+                                    padding:0.75rem 1rem;max-width:80%;font-size:0.875rem;color:#c8d4e8;'>
+                            {content}
+                        </div>
+                    </div>""", unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                    <div style='display:flex;justify-content:flex-start;margin-bottom:0.75rem;'>
+                        <div style='background:#0f1c2e;border:1px solid rgba(34,197,94,0.15);border-radius:8px 8px 8px 2px;
+                                    padding:0.75rem 1rem;max-width:85%;font-size:0.875rem;color:#d4dbe8;line-height:1.6;'>
+                            <span style='font-size:0.65rem;color:#22c55e;text-transform:uppercase;letter-spacing:0.1em;
+                                         font-family:Inter,sans-serif;display:block;margin-bottom:0.4rem;'>■ Pipo</span>
+                            {content.replace(chr(10), "<br>")}
+                        </div>
+                    </div>""", unsafe_allow_html=True)
+
+    # ── Input ─────────────────────────────────────────────────
+    st.markdown("<div style='margin-top:1rem;'></div>", unsafe_allow_html=True)
+    col_inp, col_send, col_clear = st.columns([8, 1, 1])
+    with col_inp:
+        default_val = st.session_state.pop("pipo_input", "")
+        user_input = st.text_input(
+            "Nachricht",
+            value=default_val,
+            placeholder="Frag Pipo — Leads, Emails, Strategie, Einwände...",
+            label_visibility="collapsed",
+            key="pipo_text_input"
+        )
+    with col_send:
+        send_btn = st.button("→", type="primary", use_container_width=True, key="pipo_send")
+    with col_clear:
+        if st.button("✕", use_container_width=True, key="pipo_clear"):
+            st.session_state.pipo_messages = []
+            st.rerun()
+
+    if (send_btn or (user_input and user_input.endswith("\n"))) and user_input.strip():
+        user_msg = user_input.strip()
+        st.session_state.pipo_messages.append({"role": "user", "content": user_msg})
+        with st.spinner("Pipo denkt..."):
+            reply = pipo_chat(
+                [{"role": m["role"], "content": m["content"]} for m in st.session_state.pipo_messages],
+                stats
+            )
+        st.session_state.pipo_messages.append({"role": "assistant", "content": reply})
+        st.rerun()
+
+    # ── Context Info ──────────────────────────────────────────
+    with st.expander("ℹ️ Pipo's Kontext", expanded=False):
+        st.markdown(f"""
+        **Live Datenbank:**
+        - {stats.get('total', 0):,} Leads total
+        - {stats.get('qualified', 0)} qualifiziert (MEDDPICC ≥60)
+        - €{stats.get('pipeline', 0):.0f}M Pipeline
+        - {stats.get('stale', 0)} inaktiv >7 Tage
+
+        **Bitwise Kernfakten:**
+        - $15B+ AUM | 40+ Produkte | 4.000+ institutionelle Clients
+        - BOS: ~$5B ETH gestaked | Zero Slashings seit Genesis (Sep 2022)
+        - Uptime 2025: 99.984% | APR: 3.170% (+0.155% vs Benchmark)
+        - MiCA-konform | Institutional-grade Reporting
+
+        **Philipps Fokus:** EMEA (DE > CH > UAE > UK > NORDICS)
+        """)
+    if not (st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")):
+        st.warning("⚠️ **ANTHROPIC_API_KEY** nicht gesetzt. Bitte in Streamlit Cloud → App Settings → Secrets hinzufügen: `ANTHROPIC_API_KEY = \"sk-ant-...\"`")
+
+# ── Footer ─────────────────────────────────────────────────────────────────────
+st.markdown("""
+<div class='bw-footer'>
+    StakeStream · Bitwise Onchain Solutions · EMEA · Powered by Pipo
+</div>""", unsafe_allow_html=True)
