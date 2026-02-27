@@ -20,47 +20,120 @@ st.set_page_config(
     menu_items={'Get Help': None, 'Report a bug': None, 'About': 'StakeStream — Bitwise EMEA'}
 )
 
-# ── Dark Mobile CSS (same as v6) ───────────────────────────────────────────────
+# ── Bitwise Brand CSS ──────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-.stApp { background: #0f0f0f; color: #e5e5e5; }
-h1, h2, h3 { color: #ffffff; letter-spacing: -0.02em; }
-h1 { font-size: clamp(1.4rem, 5vw, 2rem); font-weight: 600; margin-bottom: 1rem; }
-h2 { font-size: clamp(1rem, 4vw, 1.25rem); font-weight: 500; margin-top: 1.5rem; }
-section[data-testid="stSidebar"] { background: #1a1a1a; border-right: 1px solid #2a2a2a; }
-.metric-card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; padding: 1rem; text-align: center; margin-bottom: 0.5rem; }
-.metric-card:hover { border-color: #3b82f6; }
-.metric-val { font-size: clamp(1.5rem, 6vw, 2rem); font-weight: 700; color: #fff; }
-.metric-lbl { font-size: 0.75rem; color: #737373; margin-top: 0.125rem; text-transform: uppercase; letter-spacing: 0.05em; }
-.alert-card { background: #1a1a1a; border-radius: 10px; padding: 1rem; margin-bottom: 0.75rem; border-left: 4px solid #ef4444; }
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300;1,400&family=Inter:wght@300;400;500;600&display=swap');
+
+/* ── Base ── */
+.stApp {
+    background: #0d1520;
+    color: #d4dbe8;
+    background-image:
+        linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+    background-size: 40px 40px;
+}
+.main .block-container { max-width: 1400px; padding: 1.5rem 1.5rem 3rem; }
+
+/* ── Typography ── */
+h1, h2, h3 { font-family: 'Cormorant Garamond', 'Georgia', serif; color: #ffffff; font-weight: 300; letter-spacing: -0.01em; }
+h1 { font-size: clamp(1.5rem, 5vw, 2.25rem); font-style: italic; margin-bottom: 0.25rem; }
+h2 { font-size: clamp(1rem, 3.5vw, 1.35rem); margin-top: 1.5rem; color: #c8d4e8; }
+h3 { font-size: clamp(0.9rem, 3vw, 1.1rem); color: #a0b0c8; }
+p, span, div, label { font-family: 'Inter', -apple-system, sans-serif; }
+
+/* ── Header Brand Bar ── */
+.bw-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.75rem 0 1.25rem;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    margin-bottom: 1.5rem;
+}
+.bw-logo {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 1.5rem; font-weight: 400; color: #fff; letter-spacing: 0.01em;
+}
+.bw-logo span { color: #22c55e; }
+.bw-subtitle { font-family: 'Inter', sans-serif; font-size: 0.7rem; color: #4a6080; text-transform: uppercase; letter-spacing: 0.15em; margin-top: 2px; }
+.bw-date { font-family: 'Inter', sans-serif; font-size: 0.75rem; color: #4a6080; text-align: right; }
+
+/* ── Metric Cards ── */
+.metric-card {
+    background: #0f1c2e;
+    border: 1px solid rgba(255,255,255,0.07);
+    border-top: 2px solid #22c55e;
+    border-radius: 4px;
+    padding: 1.25rem 1rem;
+    text-align: center;
+    margin-bottom: 0.5rem;
+    transition: border-color 0.2s;
+}
+.metric-card:hover { border-color: #22c55e; border-top-color: #22c55e; }
+.metric-card.alert { border-top-color: #ef4444; }
+.metric-card.warn  { border-top-color: #f59e0b; }
+.metric-card.purple { border-top-color: #6366f1; }
+.metric-val { font-family: 'Cormorant Garamond', serif; font-size: clamp(1.75rem, 6vw, 2.5rem); font-weight: 300; color: #fff; line-height: 1; }
+.metric-lbl { font-size: 0.65rem; color: #4a6080; margin-top: 0.375rem; text-transform: uppercase; letter-spacing: 0.12em; }
+
+/* ── Lead Cards ── */
+.lead-row {
+    background: #0f1c2e;
+    border: 1px solid rgba(255,255,255,0.07);
+    border-left: 3px solid #22c55e;
+    border-radius: 4px;
+    padding: 0.875rem 1rem;
+    margin-bottom: 0.5rem;
+    transition: border-color 0.2s;
+}
+.lead-row:hover { border-color: #22c55e; }
+.lead-row.tier1 { border-left-color: #22c55e; }
+.lead-row.tier2 { border-left-color: #6366f1; }
+.lead-row.tier3 { border-left-color: #334155; }
+.lead-company { font-family: 'Inter', sans-serif; font-weight: 600; font-size: 0.9375rem; color: #e8f0ff; }
+.lead-meta { font-size: 0.75rem; color: #4a6080; margin-top: 0.25rem; }
+
+/* ── Alert Cards ── */
+.alert-card { background: #0f1c2e; border-radius: 4px; padding: 1rem; margin-bottom: 0.75rem; border-left: 3px solid #ef4444; }
 .alert-card.warning { border-left-color: #f59e0b; }
-.alert-card.info { border-left-color: #3b82f6; }
-.alert-title { font-size: 1rem; font-weight: 600; color: #fff; }
-.alert-sub { font-size: 0.8125rem; color: #a3a3a3; margin-top: 0.25rem; }
-.lead-row { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 0.875rem 1rem; margin-bottom: 0.5rem; }
-.lead-row:hover { border-color: #3b82f6; }
-.lead-company { font-weight: 600; font-size: 0.9375rem; }
-.lead-meta { font-size: 0.75rem; color: #737373; margin-top: 0.125rem; }
-.score-badge { background: #2a2a2a; border-radius: 6px; padding: 0.25rem 0.5rem; font-size: 0.75rem; font-weight: 600; color: #e5e5e5; white-space: nowrap; }
-.score-badge.qualified { background: #166534; color: #86efac; }
-.score-badge.probable { background: #1e3a8a; color: #93c5fd; }
-.score-badge.possible { background: #713f12; color: #fde68a; }
-.pill { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.6875rem; font-weight: 600; }
-.pill-green { background: #166534; color: #86efac; }
-.pill-yellow { background: #713f12; color: #fde68a; }
-.pill-red { background: #7f1d1d; color: #fca5a5; }
-.stButton > button { border-radius: 8px !important; font-weight: 500 !important; }
-.stButton > button[kind="primary"] { background: #3b82f6 !important; color: white !important; border: none !important; }
-.stTabs [data-baseweb="tab-list"] { background: #1a1a1a; border-radius: 8px; padding: 4px; gap: 2px; }
-.stTabs [data-baseweb="tab"] { background: transparent !important; color: #737373 !important; border-radius: 6px !important; font-size: clamp(0.75rem, 2.5vw, 0.875rem) !important; padding: 0.4rem 0.75rem !important; }
-.stTabs [aria-selected="true"] { background: #2a2a2a !important; color: #fff !important; }
-.stDataFrame { border: 1px solid #2a2a2a !important; border-radius: 8px !important; }
-.stTextInput input, .stSelectbox select, .stTextArea textarea { background: #1a1a1a !important; border: 1px solid #2a2a2a !important; border-radius: 8px !important; color: #e5e5e5 !important; }
-.streamlit-expanderHeader { background: #1a1a1a !important; border: 1px solid #2a2a2a !important; border-radius: 8px !important; color: #e5e5e5 !important; }
-.stSelectbox > div > div { background: #1a1a1a !important; border-color: #2a2a2a !important; color: #e5e5e5 !important; }
+.alert-card.info    { border-left-color: #6366f1; }
+.alert-card.success { border-left-color: #22c55e; }
+.alert-title { font-size: 0.9375rem; font-weight: 600; color: #e8f0ff; }
+.alert-sub   { font-size: 0.8rem; color: #4a6080; margin-top: 0.25rem; }
+
+/* ── Badges ── */
+.score-badge { background: #1a2840; border-radius: 3px; padding: 0.2rem 0.5rem; font-size: 0.7rem; font-weight: 600; color: #6b7fa0; white-space: nowrap; font-family: 'Inter', sans-serif; letter-spacing: 0.05em; }
+.score-badge.qualified { background: #052e16; color: #22c55e; border: 1px solid #166534; }
+.score-badge.probable  { background: #1e1b4b; color: #818cf8; border: 1px solid #3730a3; }
+.score-badge.possible  { background: #1c1917; color: #d4a660; border: 1px solid #78350f; }
+.pill { display: inline-block; padding: 2px 8px; border-radius: 2px; font-size: 0.65rem; font-weight: 600; letter-spacing: 0.05em; }
+.pill-green  { background: #052e16; color: #22c55e; }
+.pill-yellow { background: #1c1917; color: #d4a660; }
+.pill-red    { background: #1f0909; color: #f87171; }
+.pill-blue   { background: #0c1a3a; color: #6366f1; }
+
+/* ── Tabs ── */
+.stTabs [data-baseweb="tab-list"] { background: #0a1624; border-radius: 4px; padding: 3px; gap: 1px; border: 1px solid rgba(255,255,255,0.06); }
+.stTabs [data-baseweb="tab"] { background: transparent !important; color: #4a6080 !important; border-radius: 3px !important; font-size: clamp(0.7rem, 2.2vw, 0.8rem) !important; padding: 0.4rem 0.7rem !important; font-family: 'Inter', sans-serif !important; letter-spacing: 0.03em !important; }
+.stTabs [aria-selected="true"] { background: #0f1c2e !important; color: #22c55e !important; border: 1px solid rgba(34,197,94,0.2) !important; }
+
+/* ── Buttons ── */
+.stButton > button { border-radius: 3px !important; font-weight: 500 !important; font-family: 'Inter', sans-serif !important; font-size: 0.8rem !important; letter-spacing: 0.05em !important; text-transform: uppercase !important; }
+.stButton > button[kind="primary"] { background: #22c55e !important; color: #052e16 !important; border: none !important; }
+.stButton > button:not([kind="primary"]) { background: #0f1c2e !important; color: #6b8ab0 !important; border: 1px solid rgba(255,255,255,0.08) !important; }
+
+/* ── Inputs ── */
+.stTextInput input, .stSelectbox select, .stTextArea textarea { background: #0a1624 !important; border: 1px solid rgba(255,255,255,0.08) !important; border-radius: 3px !important; color: #d4dbe8 !important; font-family: 'Inter', sans-serif !important; }
+.stSelectbox > div > div { background: #0a1624 !important; border-color: rgba(255,255,255,0.08) !important; color: #d4dbe8 !important; }
+.streamlit-expanderHeader { background: #0f1c2e !important; border: 1px solid rgba(255,255,255,0.07) !important; border-radius: 4px !important; color: #d4dbe8 !important; }
+
+/* ── Misc ── */
+section[data-testid="stSidebar"] { background: #0a1624; border-right: 1px solid rgba(255,255,255,0.06); }
+.stDataFrame { border: 1px solid rgba(255,255,255,0.07) !important; border-radius: 4px !important; }
 footer { visibility: hidden !important; }
 #MainMenu { visibility: hidden !important; }
-hr { border-color: #2a2a2a !important; margin: 1rem 0 !important; }
+hr { border-color: rgba(255,255,255,0.06) !important; margin: 1.25rem 0 !important; }
+.bw-footer { font-size: 0.6rem; color: #1e3050; text-transform: uppercase; letter-spacing: 0.1em; text-align: center; padding: 1rem 0 0; border-top: 1px solid rgba(255,255,255,0.04); margin-top: 2rem; }
 @media (max-width: 768px) { .main .block-container { padding: 0.75rem !important; } }
 </style>
 """, unsafe_allow_html=True)
@@ -194,22 +267,29 @@ tasks_df = load_tasks()
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## ◆ StakeStream")
-    st.markdown("<span style='color:#737373;font-size:0.8125rem;'>Bitwise EMEA Command Center</span>", unsafe_allow_html=True)
-    st.markdown("---")
+    st.markdown("""
+    <div style='padding:0.5rem 0 1rem;border-bottom:1px solid rgba(255,255,255,0.06);margin-bottom:1rem;'>
+        <div style='font-family:Cormorant Garamond,Georgia,serif;font-size:1.1rem;color:#fff;font-weight:300;'>
+            <span style='color:#22c55e;'>■</span> StakeStream
+        </div>
+        <div style='font-size:0.6rem;color:#1e3050;text-transform:uppercase;letter-spacing:0.15em;margin-top:3px;'>
+            Bitwise Onchain Solutions · EMEA
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
     if not df.empty:
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown(f"<div style='font-size:1.5rem;font-weight:700;'>{stats['total']:,}</div><div style='font-size:0.75rem;color:#737373;'>Leads</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='font-family:Cormorant Garamond,serif;font-size:1.75rem;font-weight:300;color:#fff;'>{stats['total']:,}</div><div style='font-size:0.6rem;color:#4a6080;text-transform:uppercase;letter-spacing:0.1em;'>Leads</div>", unsafe_allow_html=True)
         with c2:
-            st.markdown(f"<div style='font-size:1.5rem;font-weight:700;'>€{stats['pipeline']:.0f}M</div><div style='font-size:0.75rem;color:#737373;'>Pipeline</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='font-family:Cormorant Garamond,serif;font-size:1.75rem;font-weight:300;color:#fff;'>€{stats['pipeline']:.0f}M</div><div style='font-size:0.6rem;color:#4a6080;text-transform:uppercase;letter-spacing:0.1em;'>Pipeline</div>", unsafe_allow_html=True)
         if stats['critical'] > 0:
-            st.markdown(f"<div style='background:#7f1d1d;color:#fca5a5;padding:0.4rem 0.75rem;border-radius:8px;font-size:0.8125rem;margin-top:0.5rem;font-weight:600;'>🚨 {stats['critical']} Dringend</div>", unsafe_allow_html=True)
-    st.markdown("---")
-    if st.button("🔄 Aktualisieren"):
+            st.markdown(f"<div style='background:#1f0909;color:#f87171;padding:0.4rem 0.75rem;border-radius:3px;border:1px solid #7f1d1d;font-size:0.75rem;margin-top:0.75rem;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;'>⚠ {stats['critical']} DRINGEND</div>", unsafe_allow_html=True)
+    st.markdown("<hr style='border-color:rgba(255,255,255,0.05);margin:1rem 0;'>", unsafe_allow_html=True)
+    if st.button("↻  Aktualisieren"):
         st.cache_data.clear()
         st.rerun()
-    st.markdown(f"<span style='color:#3a3a3a;font-size:0.75rem;'>v7.0 Supabase • {datetime.now().strftime('%d.%m %H:%M')}</span>", unsafe_allow_html=True)
+    st.markdown(f"<div style='font-size:0.6rem;color:#1e3050;text-transform:uppercase;letter-spacing:0.08em;margin-top:0.5rem;'>Supabase Cloud · {datetime.now().strftime('%d.%m %H:%M')}</div>", unsafe_allow_html=True)
 
 # ── Navigation ─────────────────────────────────────────────────────────────────
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
@@ -221,22 +301,32 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
 # TAB 1: DASHBOARD
 # ══════════════════════════════════════════════════════════════
 with tab1:
-    st.markdown("# ◆ StakeStream")
-    st.markdown(f"<span style='color:#737373;'>Bitwise EMEA • {datetime.now().strftime('%a, %d. %b %Y')}</span>", unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class='bw-header'>
+        <div>
+            <div class='bw-logo'><span>■</span> StakeStream</div>
+            <div class='bw-subtitle'>Bitwise Onchain Solutions · EMEA</div>
+        </div>
+        <div class='bw-date'>
+            {datetime.now().strftime('%A, %d. %b %Y')}<br>
+            <span style='color:#22c55e;font-size:0.65rem;'>● LIVE</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     if df.empty:
         st.warning("Keine Daten. Leads müssen erst in Supabase migriert werden.")
     else:
         c1, c2, c3, c4 = st.columns(4)
-        for col, val, label, alert in [
-            (c1, f"{stats['total']:,}", "Leads gesamt", False),
-            (c2, str(stats['qualified']), "Qualifiziert", False),
-            (c3, f"⚠️ {stats['stale']}" if stats['stale'] else "0", "Inaktiv >7T", stats['stale'] > 0),
-            (c4, f"€{stats['pipeline']:.0f}M", "Pipeline", False),
-        ]:
+        cards = [
+            (c1, f"{stats['total']:,}", "Leads gesamt",  "#22c55e", ""),
+            (c2, str(stats['qualified']), "Qualifiziert", "#6366f1", "purple"),
+            (c3, str(stats['stale']),     "Inaktiv >7T",  "#ef4444" if stats['stale'] > 0 else "#4a6080", "alert" if stats['stale'] > 0 else ""),
+            (c4, f"€{stats['pipeline']:.0f}M", "Pipeline", "#22c55e", ""),
+        ]
+        for col, val, label, color, cls in cards:
             with col:
-                color = "#ef4444" if alert else "#fff"
-                st.markdown(f"""<div class="metric-card">
+                st.markdown(f"""<div class="metric-card {cls}">
                     <div class="metric-val" style="color:{color};">{val}</div>
                     <div class="metric-lbl">{label}</div>
                 </div>""", unsafe_allow_html=True)
@@ -264,9 +354,9 @@ with tab1:
             st.markdown("### Leads nach Region")
             reg = df.groupby("region").size().reset_index(name="Count")
             fig = px.pie(reg, values="Count", names="region",
-                         color_discrete_sequence=["#3b82f6","#8b5cf6","#06b6d4","#10b981","#f59e0b"], hole=0.5)
-            fig.update_layout(height=260, paper_bgcolor="rgba(0,0,0,0)", font_color="#e5e5e5",
-                              legend=dict(orientation="h", y=-0.3, font_size=11),
+                         color_discrete_sequence=["#22c55e","#6366f1","#06b6d4","#a78bfa","#d4a660","#3b82f6","#f87171"], hole=0.55)
+            fig.update_layout(height=260, paper_bgcolor="rgba(0,0,0,0)", font_color="#d4dbe8",
+                              legend=dict(orientation="h", y=-0.3, font_size=10, font_color="#4a6080"),
                               margin=dict(t=10, b=50, l=10, r=10))
             st.plotly_chart(fig, use_container_width=True)
 
@@ -276,12 +366,12 @@ with tab1:
             qc = df["qualification"].value_counts()
             fig = go.Figure(go.Bar(
                 x=order, y=[qc.get(o, 0) for o in order],
-                marker_color=["#86efac","#93c5fd","#fde68a","#525252"],
+                marker_color=["#22c55e","#6366f1","#d4a660","#1e3050"],
                 text=[qc.get(o, 0) for o in order], textposition="outside",
                 textfont=dict(color="#e5e5e5")
             ))
             fig.update_layout(height=260, paper_bgcolor="rgba(0,0,0,0)",
-                              plot_bgcolor="rgba(0,0,0,0)", font_color="#e5e5e5",
+                              plot_bgcolor="rgba(0,0,0,0)", font_color="#d4dbe8",
                               showlegend=False,
                               xaxis=dict(showgrid=False, tickfont_size=11),
                               yaxis=dict(showgrid=True, gridcolor="#2a2a2a"),
@@ -595,11 +685,11 @@ with tab6:
                 fig = go.Figure(go.Indicator(mode="gauge+number", value=total,
                     title={"text":f"<b>{ql}</b>","font":{"color":"#e5e5e5","size":13}},
                     number={"font":{"color":"#e5e5e5","size":34}},
-                    gauge={"axis":{"range":[0,80],"tickcolor":"#e5e5e5"},"bar":{"color":"#3b82f6"},
+                    gauge={"axis":{"range":[0,80],"tickcolor":"#4a6080"},"bar":{"color":"#22c55e"},
                            "bgcolor":"#2a2a2a","steps":[{"range":[0,30],"color":"#1a1a1a"},
                            {"range":[30,50],"color":"#7f1d1d"},{"range":[50,70],"color":"#1e3a8a"},
                            {"range":[70,80],"color":"#166534"}]}))
-                fig.update_layout(height=220, paper_bgcolor="rgba(0,0,0,0)", font_color="#e5e5e5", margin=dict(t=30,b=10,l=10,r=10))
+                fig.update_layout(height=220, paper_bgcolor="rgba(0,0,0,0)", font_color="#d4dbe8", margin=dict(t=30,b=10,l=10,r=10))
                 st.plotly_chart(fig, use_container_width=True)
             if st.button("💾 Speichern", type="primary") and sb:
                 try:
