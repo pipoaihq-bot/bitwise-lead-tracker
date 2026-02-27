@@ -197,7 +197,7 @@ class SmartMorningBriefing:
         Holt und scored alle relevanten Leads, gibt Top 5 zurück
         """
         query = """
-        SELECT 
+        SELECT
             l.id,
             l.company,
             l.region,
@@ -206,19 +206,28 @@ class SmartMorningBriefing:
             l.title,
             l.linkedin,
             l.expected_deal_size_millions,
-            COALESCE(m.total_score, 0) as meddpicc_total,
-            COALESCE(m.qualification_status, 'UNQUALIFIED') as qualification,
             COALESCE(
-                (SELECT MAX(created_at) FROM activities WHERE lead_id = l.id),
-                l.updated_at,
-                l.created_at
-            ) as last_activity_date,
-            COALESCE(
-                (SELECT activity_type FROM activities 
-                 WHERE lead_id = l.id 
-                 ORDER BY created_at DESC LIMIT 1),
-                'No Activity'
-            ) as last_activity_type
+                m.metrics + m.economic_buyer + m.decision_process + m.decision_criteria +
+                m.paper_process + m.pain + m.champion + m.competition,
+                0
+            ) as meddpicc_total,
+            CASE
+                WHEN COALESCE(
+                    m.metrics + m.economic_buyer + m.decision_process + m.decision_criteria +
+                    m.paper_process + m.pain + m.champion + m.competition, 0
+                ) >= 70 THEN 'QUALIFIED'
+                WHEN COALESCE(
+                    m.metrics + m.economic_buyer + m.decision_process + m.decision_criteria +
+                    m.paper_process + m.pain + m.champion + m.competition, 0
+                ) >= 50 THEN 'PROBABLE'
+                WHEN COALESCE(
+                    m.metrics + m.economic_buyer + m.decision_process + m.decision_criteria +
+                    m.paper_process + m.pain + m.champion + m.competition, 0
+                ) >= 30 THEN 'POSSIBLE'
+                ELSE 'UNQUALIFIED'
+            END as qualification,
+            COALESCE(l.updated_at, l.created_at) as last_activity_date,
+            'DB Update' as last_activity_type
         FROM leads l
         LEFT JOIN meddpicc_scores m ON l.id = m.lead_id
         WHERE l.stage NOT IN ('closed_won', 'closed_lost')
