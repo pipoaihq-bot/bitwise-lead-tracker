@@ -1077,6 +1077,80 @@ with tab8:
     if not (st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")):
         st.warning("⚠️ **ANTHROPIC_API_KEY** nicht gesetzt. Bitte in Streamlit Cloud → App Settings → Secrets hinzufügen: `ANTHROPIC_API_KEY = \"sk-ant-...\"`")
 
+    st.markdown("---")
+
+    # ── Pipo Evaluate Status ──────────────────────────────────
+    st.markdown("### 🔍 Pipo Lead-Evaluierung")
+    st.markdown("<div style='font-size:0.8rem;color:#4a6080;margin-bottom:1rem;'>Pipo bewertet alle Leads automatisch mit geschätzten MEDDPICC-Scores basierend auf Titel, Industry, Region und AUM. Das Script läuft auf deinem Mac mini.</div>", unsafe_allow_html=True)
+
+    if not df.empty:
+        scored_count = int((df["meddpicc"] > 0).sum())
+        unscored_count = int((df["meddpicc"] == 0).sum())
+        total_count = len(df)
+        pct = int(scored_count / total_count * 100) if total_count > 0 else 0
+
+        ec1, ec2, ec3 = st.columns(3)
+        ec1.markdown(f"<div class='metric-card'><div class='metric-val' style='color:#22c55e;font-size:1.5rem;'>{scored_count:,}</div><div class='metric-lbl'>Gescored</div></div>", unsafe_allow_html=True)
+        ec2.markdown(f"<div class='metric-card alert'><div class='metric-val' style='color:#ef4444;font-size:1.5rem;'>{unscored_count:,}</div><div class='metric-lbl'>Unbewertet</div></div>", unsafe_allow_html=True)
+        ec3.markdown(f"<div class='metric-card purple'><div class='metric-val' style='color:#6366f1;font-size:1.5rem;'>{pct}%</div><div class='metric-lbl'>Coverage</div></div>", unsafe_allow_html=True)
+
+        # Progress bar
+        st.markdown(f"""
+        <div style='margin:1rem 0 0.25rem;font-size:0.65rem;color:#4a6080;text-transform:uppercase;letter-spacing:0.1em;'>Evaluierungs-Fortschritt</div>
+        <div style='background:#0a1624;border-radius:4px;height:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.06);'>
+            <div style='background:linear-gradient(90deg,#22c55e,#6366f1);height:100%;width:{pct}%;border-radius:4px;transition:width 0.5s;'></div>
+        </div>
+        <div style='font-size:0.7rem;color:#4a6080;margin-top:4px;'>{scored_count:,} von {total_count:,} Leads bewertet</div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("<div style='margin-top:1.25rem;'></div>", unsafe_allow_html=True)
+
+        # Command to run
+        with st.expander("▶ Script starten (auf Mac mini)", expanded=unscored_count > 0):
+            st.markdown("**1. Environment vorbereiten:**")
+            st.code("""export SUPABASE_URL="https://cxrhqzggukuqxpsausrd.supabase.co"
+export SUPABASE_KEY="dein-anon-key"
+export ANTHROPIC_API_KEY="sk-ant-..."
+""", language="bash")
+            st.markdown("**2. Alle ungescoredeten Leads bewerten:**")
+            st.code("cd ~/openclaw/workspace/bitwise/leadtracker\npython3 pipo_evaluate.py", language="bash")
+
+            st.markdown("**Optionen:**")
+            st.code("""# Nur Deutschland:
+python3 pipo_evaluate.py --region DE
+
+# Nur erste 50 testen:
+python3 pipo_evaluate.py --limit 50
+
+# Dry-Run (nichts speichern):
+python3 pipo_evaluate.py --dry-run
+
+# Alle neu bewerten (auch bestehende):
+python3 pipo_evaluate.py --force
+""", language="bash")
+
+            st.markdown(f"**Schätzung:** {unscored_count:,} Leads × {BATCH_SIZE if False else 20} Leads/Batch = ~{unscored_count//20 + 1} API-Calls — ca. **{unscored_count * 0.001:.1f}–{unscored_count * 0.003:.1f} USD** (Haiku-Preise)")
+
+    # Qualification breakdown (only scored)
+    scored_df = df[df["meddpicc"] > 0] if not df.empty else pd.DataFrame()
+    if not scored_df.empty:
+        st.markdown("<div style='margin-top:1rem;font-size:0.7rem;color:#4a6080;text-transform:uppercase;letter-spacing:0.1em;'>Ergebnis der bewerteten Leads</div>", unsafe_allow_html=True)
+        ql_counts = scored_df["qualification"].value_counts()
+        qcols = st.columns(4)
+        ql_config = [
+            ("QUALIFIED",   "#22c55e", "✅"),
+            ("PROBABLE",    "#6366f1", "🔵"),
+            ("POSSIBLE",    "#d4a660", "🟡"),
+            ("UNQUALIFIED", "#4a6080", "⚪"),
+        ]
+        for col, (ql, color, icon) in zip(qcols, ql_config):
+            cnt = ql_counts.get(ql, 0)
+            pct_ql = int(cnt / len(scored_df) * 100) if len(scored_df) > 0 else 0
+            col.markdown(f"""<div class='metric-card' style='border-top-color:{color};'>
+                <div class='metric-val' style='color:{color};font-size:1.35rem;'>{cnt:,}</div>
+                <div class='metric-lbl'>{icon} {ql} ({pct_ql}%)</div>
+            </div>""", unsafe_allow_html=True)
+
 # ── Footer ─────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class='bw-footer'>
