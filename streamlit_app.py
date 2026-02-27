@@ -105,14 +105,28 @@ def load_data():
     if not sb:
         return pd.DataFrame(), {}
     try:
-        # Load leads with meddpicc scores via join
-        resp = sb.table("leads").select(
-            "*, meddpicc_scores(total_score, qualification_status, metrics, economic_buyer, "
-            "decision_process, decision_criteria, paper_process, pain, champion, competition)"
-        ).execute()
+        # Load leads with meddpicc scores via join (paginated, alle Records)
+        all_data = []
+        page_size = 1000
+        offset = 0
+        while True:
+            resp = sb.table("leads").select(
+                "*, meddpicc_scores(total_score, qualification_status, metrics, economic_buyer, "
+                "decision_process, decision_criteria, paper_process, pain, champion, competition)"
+            ).range(offset, offset + page_size - 1).execute()
+            if not resp.data:
+                break
+            all_data.extend(resp.data)
+            if len(resp.data) < page_size:
+                break
+            offset += page_size
 
-        if not resp.data:
+        if not all_data:
             return pd.DataFrame(), {}
+        # Alias for compatibility
+        class _R:
+            def __init__(self, data): self.data = data
+        resp = _R(all_data)
 
         rows = []
         for lead in resp.data:
