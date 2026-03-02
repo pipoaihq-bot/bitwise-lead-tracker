@@ -705,14 +705,32 @@ def process_message(chat_id, text):
         handle_status(chat_id, text[8:].strip())
         return
 
-    # LinkedIn URL
+    # /add und hinzufügen VOR LinkedIn-URL-Check
+    # (sonst wird "/add https://linkedin.com/..." vom URL-Regex abgefangen)
+    want_strategy = any(w in text_lower for w in ["strategie", "strategy", "battle card", "battlecard"])
+    if (text_lower.startswith("/add") or text_lower.startswith("add ")
+            or any(w in text_lower for w in ["hinzufügen", "hinzufuegen", "füge hinzu", "fueg hinzu",
+                                              "add lead", "hinzufügen", "eintragen", "in db"])):
+        # Argumente: alles nach dem ersten Wort/Befehl
+        args = ""
+        for prefix in ("/add ", "add ", "hinzufügen ", "hinzufuegen ", "füge hinzu ", "fueg hinzu "):
+            if text_lower.startswith(prefix):
+                args = text[len(prefix):]
+                break
+        # Strategie-Keywords + Sonderzeichen aus args entfernen
+        # ("hinzufügen + strategie" → args "+" → company "+" — verhindert den Bug)
+        args = re.sub(r'\b(?:strategie|strategy|battle\s*card|battlecard)\b', '', args, flags=re.IGNORECASE)
+        args = re.sub(r'^[\s+,&|]+', '', args).rstrip()  # führende + und Leerzeichen weg
+        handle_add_lead(chat_id, args, auto_strategy=want_strategy)
+        return
+
+    # LinkedIn URL (bare URL ohne Befehl)
     li_match = LINKEDIN_REGEX.search(text)
     if li_match:
         handle_linkedin_lookup(chat_id, text, li_match.group(0).rstrip("/.,!?"))
         return
 
     # /find [Rolle] bei [Firma] — Sales Navigator: Entscheider suchen
-    # z.B. "/find CFO bei Deutsche Digital Assets" oder "wer ist CTO bei Euler Hermes?"
     find_match = None
     if text_lower.startswith("/find "):
         find_rest = text[6:].strip()
@@ -729,24 +747,6 @@ def process_message(chat_id, text):
             find_match = ("Managing Director CIO CFO", m.group(1).strip())
     if find_match:
         handle_find_contacts(chat_id, find_match[0], find_match[1])
-        return
-
-    # /add oder "hinzufügen" — mit oder ohne Argumente, mit oder ohne Strategie
-    want_strategy = any(w in text_lower for w in ["strategie", "strategy", "battle card", "battlecard"])
-    if (text_lower.startswith("/add") or text_lower.startswith("add ")
-            or any(w in text_lower for w in ["hinzufügen", "hinzufuegen", "füge hinzu", "fueg hinzu",
-                                              "add lead", "hinzufügen", "eintragen", "in db"])):
-        # Argumente: alles nach dem ersten Wort/Befehl
-        args = ""
-        for prefix in ("/add ", "add ", "hinzufügen ", "hinzufuegen ", "füge hinzu ", "fueg hinzu "):
-            if text_lower.startswith(prefix):
-                args = text[len(prefix):]
-                break
-        # Strategie-Keywords + Sonderzeichen aus args entfernen
-        # ("hinzufügen + strategie" → args "+" → company "+" — verhindert den Bug)
-        args = re.sub(r'\b(?:strategie|strategy|battle\s*card|battlecard)\b', '', args, flags=re.IGNORECASE)
-        args = re.sub(r'^[\s+,&|]+', '', args).rstrip()  # führende + und Leerzeichen weg
-        handle_add_lead(chat_id, args, auto_strategy=want_strategy)
         return
 
     # /card, "battle card" oder "strategie" — mit oder ohne Firmenname
