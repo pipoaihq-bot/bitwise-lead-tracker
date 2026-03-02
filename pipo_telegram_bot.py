@@ -379,6 +379,65 @@ Antworte in 2-3 Sätzen:
         log(f"claude_quick_analysis error: {e}")
     return ""
 
+
+# ── Claude: Intent Router ─────────────────────────────────────────────────────
+_INTENT_SYSTEM = """Du bist Intent-Parser für einen Pre-Sales Telegram-Bot (Bitwise EMEA).
+Analysiere die Nachricht und gib NUR JSON zurück — kein Text, kein Markdown.
+
+Aktionen und Parameter:
+- linkedin_lookup  → {li_url}
+- add_lead         → {li_url?, company?, name?, region?, tier?, want_strategy?}
+- battle_card      → {company?}
+- status           → {company_or_url?}
+- find_contacts    → {role, company}
+- top_leads        → {n?}
+- help             → {}
+- unknown          → {}
+
+Regeln:
+- "hinzufügen/anlegen/add/eintragen" → add_lead
+- "strategie/battle card" zusammen mit add → add_lead + want_strategy=true
+- "strategie/battle card/card" alleine → battle_card
+- "status/wie läuft/wie steht/was ist bei" → status
+- "wer ist/finde/entscheider/suche" + Firma → find_contacts
+- "top leads/top N/zeig leads" → top_leads
+- bare LinkedIn-URL → linkedin_lookup
+- Firma ohne Befehl → status
+- Parameter weglassen wenn unbekannt (nicht raten)
+
+JSON-Format: {"action":"...","params":{...}}"""
+
+def claude_route_intent(text: str, ctx: dict) -> dict | None:
+    """Nutzt Claude Haiku um Intent + Parameter zu extrahieren. None bei Fehler."""
+    if not ANTHROPIC_KEY:
+        return None
+    ctx_str = ""
+    if ctx:
+        ctx_str = f"Letzter Lead: {ctx.get('name','')} @ {ctx.get('company','')} URL={ctx.get('li_url','')}"
+    payload = json.dumps({
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 120,
+        "system": _INTENT_SYSTEM,
+        "messages": [{"role": "user", "content": f"Kontext: {ctx_str}\nNachricht: {text}"}]
+    }).encode()
+    try:
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=payload, method="POST",
+            headers={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01",
+                     "content-type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=8) as r:
+            raw = json.loads(r.read())["content"][0]["text"].strip()
+        raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw)
+        result = json.loads(raw)
+        log(f"claude_route: {result}")
+        return result
+    except Exception as e:
+        log(f"claude_route error: {e}")
+        return None
+
+
 # ── Command Handlers ──────────────────────────────────────────────────────────
 
 def set_context(chat_id, li_url="", name="", company="", profile=None, db_lead=None):
@@ -527,25 +586,34 @@ def handle_status(chat_id, company_query):
     tg_send(chat_id, msg)
 
 
-def handle_add_lead(chat_id, args_text, auto_strategy=False):
-    """Fügt neuen Lead hinzu. Nutzt Kontext wenn kein Argument angegeben."""
-    args_text = args_text.strip()
-    parts = args_text.split()
+def handle_add_lead(chat_id, args_text="", auto_strategy=False, parsed=None):
+    """Fügt neuen Lead hinzu. Nutzt Kontext wenn kein Argument angegeben.
+    parsed: optionales dict mit vorbereiteten Feldern vom Claude-Router (unterstützt Firmennamen mit Leerzeichen).
+    """
     li_url  = ""
     company = ""
     region  = "DE"
     tier    = 2
 
-    for p in parts:
-        if "linkedin.com/in/" in p:
-            li_url = p
-        elif p.upper() in ("DE", "CH", "UAE", "UK", "NORDICS", "EUROPE", "MIDEAST", "USA"):
-            region = p.upper()
-        elif p.lower().startswith("tier"):
-            try: tier = int(p[-1])
-            except: pass
-        elif not company and not p.startswith("/"):
-            company = p
+    if parsed:
+        # Direkt vom Claude-Router — Firmennamen mit Leerzeichen funktionieren hier
+        li_url  = parsed.get("li_url", "")
+        company = parsed.get("company", "")
+        region  = (parsed.get("region") or "DE").upper()
+        tier    = parsed.get("tier") or 2
+    else:
+        args_text = args_text.strip()
+        parts = args_text.split()
+        for p in parts:
+            if "linkedin.com/in/" in p:
+                li_url = p
+            elif p.upper() in ("DE", "CH", "UAE", "UK", "NORDICS", "EUROPE", "MIDEAST", "USA"):
+                region = p.upper()
+            elif p.lower().startswith("tier"):
+                try: tier = int(p[-1])
+                except: pass
+            elif not company and not p.startswith("/"):
+                company = p
 
     # Kein Argument? → Kontext nutzen
     if not li_url and not company:
@@ -705,129 +773,148 @@ def handle_help(chat_id):
 LINKEDIN_REGEX = re.compile(r'https?://(?:www\.)?linkedin\.com/in/[^\s\]>]+', re.IGNORECASE)
 
 def process_message(chat_id, text):
-    """Parst Nachricht und dispatcht an den richtigen Handler."""
+    """Parst Nachricht und dispatcht an den richtigen Handler.
+    Strategie: Claude Haiku als Intent-Router (natürliche Sprache),
+    Regex-Fallback für explizite Befehle und wenn Claude nicht verfügbar.
+    """
     text = text.strip()
     text_lower = text.lower()
 
-    # /status vor LinkedIn-URL-Check (damit "/status https://linkedin.com/..." nicht als Lookup landet)
+    # ── Explizite Slash-Befehle (immer direkt, kein AI-Overhead) ─────────────
     if text_lower.startswith("/status "):
         handle_status(chat_id, text[8:].strip())
         return
+    if text_lower.startswith("/card "):
+        handle_battle_card(chat_id, text[6:].strip())
+        return
+    if text_lower.startswith("/top"):
+        parts = text.split()
+        handle_top_leads(chat_id, int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 5)
+        return
+    if text_lower in ("/help", "help", "hilfe", "?", "/start"):
+        handle_help(chat_id)
+        return
+    if text_lower.startswith("/find "):
+        find_rest = text[6:].strip()
+        m = re.search(r'^(.+?)\s+(?:bei|at|@|von|from)\s+(.+)$', find_rest, re.IGNORECASE)
+        if m:
+            handle_find_contacts(chat_id, m.group(1).strip(), m.group(2).strip())
+            return
 
-    # /add und hinzufügen VOR LinkedIn-URL-Check
-    # (sonst wird "/add https://linkedin.com/..." vom URL-Regex abgefangen)
+    # ── Claude Intent-Router ─────────────────────────────────────────────────
+    ctx = get_context(chat_id)
+    intent = claude_route_intent(text, ctx)
+
+    if intent and intent.get("action") not in (None, "unknown"):
+        action = intent["action"]
+        params = intent.get("params", {})
+
+        if action == "linkedin_lookup":
+            li_url = params.get("li_url") or ""
+            if not li_url:
+                li_m = LINKEDIN_REGEX.search(text)
+                li_url = li_m.group(0).rstrip("/.,!?") if li_m else ""
+            if li_url:
+                handle_linkedin_lookup(chat_id, text, li_url)
+                return
+
+        elif action == "add_lead":
+            handle_add_lead(chat_id, auto_strategy=params.get("want_strategy", False), parsed=params)
+            return
+
+        elif action == "battle_card":
+            company = params.get("company", "")
+            if not company and ctx:
+                company = ctx.get("company", "")
+            if company:
+                handle_battle_card(chat_id, company)
+            else:
+                tg_send(chat_id, "❓ Für welche Firma?\n<code>/card Firmenname</code>")
+            return
+
+        elif action == "status":
+            query = params.get("company_or_url", "")
+            if not query and ctx:
+                query = ctx.get("company", "")
+            if query:
+                handle_status(chat_id, query)
+            else:
+                tg_send(chat_id, "❓ Welche Firma? Beispiel: /status Tangany")
+            return
+
+        elif action == "find_contacts":
+            role    = params.get("role", "Managing Director CIO CFO")
+            company = params.get("company", "")
+            if company:
+                handle_find_contacts(chat_id, role, company)
+                return
+
+        elif action == "top_leads":
+            handle_top_leads(chat_id, params.get("n", 5))
+            return
+
+        elif action == "help":
+            handle_help(chat_id)
+            return
+
+    # ── Regex Fallback (wenn Claude unavailable oder action == unknown) ───────
+    # LinkedIn URL
+    li_match = LINKEDIN_REGEX.search(text)
+    if li_match:
+        # /add [url] darf nicht als Lookup landen
+        want_strategy = any(w in text_lower for w in ["strategie", "strategy", "battle card", "battlecard"])
+        if (text_lower.startswith("/add") or
+                any(w in text_lower for w in ["hinzufügen", "hinzufuegen", "füge hinzu", "fueg hinzu", "eintragen"])):
+            args = re.sub(r'\b(?:strategie|strategy|battle\s*card|battlecard)\b', '', text[text_lower.find(" ")+1:], flags=re.IGNORECASE)
+            args = re.sub(r'^[\s+,&|]+', '', args).rstrip()
+            handle_add_lead(chat_id, args, auto_strategy=want_strategy)
+        else:
+            handle_linkedin_lookup(chat_id, text, li_match.group(0).rstrip("/.,!?"))
+        return
+
+    # /add und hinzufügen (ohne URL)
     want_strategy = any(w in text_lower for w in ["strategie", "strategy", "battle card", "battlecard"])
-    if (text_lower.startswith("/add") or text_lower.startswith("add ")
-            or any(w in text_lower for w in ["hinzufügen", "hinzufuegen", "füge hinzu", "fueg hinzu",
-                                              "add lead", "hinzufügen", "eintragen", "in db"])):
-        # Argumente: alles nach dem ersten Wort/Befehl
+    if (text_lower.startswith("/add") or
+            any(w in text_lower for w in ["hinzufügen", "hinzufuegen", "füge hinzu", "fueg hinzu", "add lead", "eintragen", "in db"])):
         args = ""
         for prefix in ("/add ", "add ", "hinzufügen ", "hinzufuegen ", "füge hinzu ", "fueg hinzu "):
             if text_lower.startswith(prefix):
                 args = text[len(prefix):]
                 break
-        # Strategie-Keywords + Sonderzeichen aus args entfernen
-        # ("hinzufügen + strategie" → args "+" → company "+" — verhindert den Bug)
         args = re.sub(r'\b(?:strategie|strategy|battle\s*card|battlecard)\b', '', args, flags=re.IGNORECASE)
-        args = re.sub(r'^[\s+,&|]+', '', args).rstrip()  # führende + und Leerzeichen weg
+        args = re.sub(r'^[\s+,&|]+', '', args).rstrip()
         handle_add_lead(chat_id, args, auto_strategy=want_strategy)
         return
 
-    # LinkedIn URL (bare URL ohne Befehl)
-    li_match = LINKEDIN_REGEX.search(text)
-    if li_match:
-        handle_linkedin_lookup(chat_id, text, li_match.group(0).rstrip("/.,!?"))
-        return
-
-    # /find [Rolle] bei [Firma] — Sales Navigator: Entscheider suchen
-    find_match = None
-    if text_lower.startswith("/find "):
-        find_rest = text[6:].strip()
-        m = re.search(r'^(.+?)\s+(?:bei|at|@|von|from)\s+(.+)$', find_rest, re.IGNORECASE)
-        if m:
-            find_match = (m.group(1).strip(), m.group(2).strip())
-    if not find_match:
-        m = re.search(r'(?:wer ist|wer sind|finde?|suche?)\s+(?:der\s+|die\s+|den\s+)?(.+?)\s+(?:bei|at|@|von|from)\s+(.+?)[\?!.]?$', text_lower)
-        if m:
-            find_match = (m.group(1).strip(), m.group(2).strip())
-    if not find_match:
-        m = re.search(r'(?:entscheider|decision maker|kontakte?|contacts?)\s+(?:bei|at|@|von|from)\s+(.+?)[\?!.]?$', text_lower)
-        if m:
-            find_match = ("Managing Director CIO CFO", m.group(1).strip())
-    if find_match:
-        handle_find_contacts(chat_id, find_match[0], find_match[1])
-        return
-
-    # /card, "battle card" oder "strategie" — mit oder ohne Firmenname
-    if text_lower.startswith("/card "):
-        handle_battle_card(chat_id, text[6:].strip())
-        return
+    # battle card / strategie
     if text_lower in ("strategie", "strategy", "/card", "battle card", "battlecard"):
-        # Kein Firmenname angegeben → Kontext nutzen
-        ctx = get_context(chat_id)
         if ctx and ctx.get("company"):
             handle_battle_card(chat_id, ctx["company"])
         else:
-            tg_send(chat_id, "❓ Für welche Firma? Schick zuerst eine LinkedIn URL oder:\n<code>/card Firmenname</code>")
+            tg_send(chat_id, "❓ Für welche Firma?\n<code>/card Firmenname</code>")
         return
     if "battle card" in text_lower or "battlecard" in text_lower or "strategie" in text_lower:
         query = re.sub(r'(battle\s*card|battlecard|strategie|strategy)\s*(für|for|von|about|zu)?', '', text, flags=re.IGNORECASE).strip()
-        if query:
-            handle_battle_card(chat_id, query)
+        company = query or (ctx.get("company") if ctx else "")
+        if company:
+            handle_battle_card(chat_id, company)
         else:
-            ctx = get_context(chat_id)
-            if ctx and ctx.get("company"):
-                handle_battle_card(chat_id, ctx["company"])
-            else:
-                tg_send(chat_id, "❓ Für welche Firma?\n<code>/card Firmenname</code>")
+            tg_send(chat_id, "❓ Für welche Firma?\n<code>/card Firmenname</code>")
         return
 
-    # /top oder "top leads"
-    if text_lower.startswith("/top"):
-        parts = text.split()
-        n = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 5
-        handle_top_leads(chat_id, n)
-        return
-    if any(p in text_lower for p in ["top leads", "top 5", "top 3", "zeig leads", "top lead"]):
-        m = re.search(r'top\s+(\d+)', text_lower)
-        n = int(m.group(1)) if m else 5
-        handle_top_leads(chat_id, n)
-        return
-
-    # "status von X" (natürliche Sprache — /status als Befehl wird oben abgefangen)
-    m = re.search(r'status\s+(?:von\s+|of\s+|for\s+)?(.+)', text_lower)
-    if m:
-        handle_status(chat_id, m.group(1).strip())
-        return
-
-    # "haben wir X?" / "ist X in der DB?"
-    m = re.search(r'(?:haben wir|is|sind wir|in db|in der datenbank|in database)[?:,\s]+(.+)', text_lower)
+    # "haben wir X?"
+    m = re.search(r'(?:haben wir|sind wir|in db|in der datenbank)[?:,\s]+(.+)', text_lower)
     if m:
         query = m.group(1).strip().rstrip("?").strip()
-        if "linkedin.com" in query:
-            li = LINKEDIN_REGEX.search(query)
-            if li:
-                handle_linkedin_lookup(chat_id, query, li.group(0))
-                return
         results = db_find_by_company(query)
         if results:
             l = results[0]
-            days = days_since(l.get("updated_at"))
-            tg_send(chat_id, f"✅ <b>Ja</b> — <b>{l['company']}</b> ist in StakeStream.\n"
-                              f"Stage: {l.get('stage','?')} · {days}d inaktiv\n\n"
-                              f"Mehr mit /status {query}")
+            tg_send(chat_id, f"✅ <b>Ja</b> — <b>{l['company']}</b> ist in StakeStream.\n/status {query}")
         else:
-            tg_send(chat_id, f"❌ <b>Nein</b> — '{query}' nicht in StakeStream.\n\nHinzufügen mit:\n"
-                              f"<code>/add [linkedin_url] {query} DE Tier2</code>")
+            tg_send(chat_id, f"❌ <b>Nein</b> — '{query}' nicht in StakeStream.\n<code>/add [url] {query}</code>")
         return
 
-    # /help
-    if text_lower in ("/help", "help", "hilfe", "?", "/start"):
-        handle_help(chat_id)
-        return
-
-    # Fallback — zeige Kontext falls vorhanden
-    ctx = get_context(chat_id)
+    # Fallback
     ctx_hint = ""
     if ctx and ctx.get("company"):
         ctx_hint = f"\n\n💡 Letzter Lead: <b>{ctx['company']}</b>\n<code>hinzufügen</code> · <code>strategie</code> · <code>/status {ctx['company']}</code>"
