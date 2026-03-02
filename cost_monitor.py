@@ -14,9 +14,10 @@ from collections import defaultdict
 import urllib.request, urllib.parse
 
 # ── Config ────────────────────────────────────────────────────────────────────
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
-BOT_LOG      = Path("/tmp/pipo_bot.log")
+SUPABASE_URL       = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY       = os.environ.get("SUPABASE_KEY", "")
+ANTHROPIC_ADMIN_KEY= os.environ.get("ANTHROPIC_ADMIN_KEY", "")  # sk-ant-admin...
+BOT_LOG            = Path("/tmp/pipo_bot.log")
 
 # Pricing (USD, Stand 2026 — ggf. anpassen)
 HAIKU_IN_PER_1M    = 0.80   # claude-haiku-4-5 input
@@ -33,6 +34,7 @@ T_BATTLECARD= {"in": 8000, "out": 2000}  # generate_battlecard (Sonnet, via subp
 # Monatliche Fixkosten (manuell gepflegt)
 FIXED_COSTS = {
     "LinkedIn Sales Navigator": {"eur": 100, "note": "manuell"},
+    "Claude.ai Pro":            {"eur": 18,  "note": "manuell · claude.ai Abo"},
     "Streamlit Cloud":          {"eur": 0,   "note": "Free Tier"},
     "GitHub":                   {"eur": 0,   "note": "Free / Public"},
     "Telegram Bot API":         {"eur": 0,   "note": "kostenlos"},
@@ -98,6 +100,42 @@ def sb_get(path, params=""):
             return json.loads(r.read())
     except Exception:
         return []
+
+# ── Helper: Anthropic Cost API ────────────────────────────────────────────────
+@st.cache_data(ttl=300)
+def fetch_anthropic_real_cost(admin_key: str, start_iso: str, end_iso: str):
+    """
+    Ruft echte Kosten von /v1/organizations/cost_report ab.
+    Erfordert einen Admin API Key (sk-ant-admin...).
+    Gibt dict mit total_usd, breakdown (model -> usd) oder None bei Fehler zurück.
+    """
+    if not admin_key:
+        return None
+    try:
+        params = urllib.parse.urlencode({
+            "starting_at": start_iso,
+            "ending_at":   end_iso,
+            "group_by[]":  "model",
+        })
+        url = f"https://api.anthropic.com/v1/organizations/cost_report?{params}"
+        req = urllib.request.Request(url, headers={
+            "x-api-key":         admin_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type":      "application/json",
+        })
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = json.loads(r.read())
+        # data.data = list of {start_time, end_time, model, input_tokens, output_tokens, cost_usd}
+        breakdown = {}
+        total = 0.0
+        for entry in data.get("data", []):
+            model = entry.get("model") or entry.get("description") or "other"
+            cost  = float(entry.get("cost_usd") or 0)
+            breakdown[model] = breakdown.get(model, 0) + cost
+            total += cost
+        return {"total_usd": total, "breakdown": breakdown}
+    except Exception as e:
+        return {"error": str(e)}
 
 # ── Helper: Log-Analyse ───────────────────────────────────────────────────────
 @st.cache_data(ttl=60)
@@ -178,7 +216,22 @@ st.title("💰 Pipo API Cost Monitor")
 st.caption(f"Bitwise EMEA · {month_label} · Daten aus Log + Supabase · Refresh alle 60s")
 
 counts, log_lines = parse_log(str(BOT_LOG), month_str)
-anthropic = calc_anthropic_cost(counts)
+anthropic_est = calc_anthropic_cost(counts)
+
+# Echte Anthropic-Kosten über Admin API (falls ANTHROPIC_ADMIN_KEY gesetzt)
+month_start_iso = now.strftime("%Y-%m-01T00:00:00Z")
+month_end_iso   = now.strftime("%Y-%m-%dT23:59:59Z")
+anthropic_real  = fetch_anthropic_real_cost(ANTHROPIC_ADMIN_KEY, month_start_iso, month_end_iso)
+
+# Welche Zahl verwenden wir?
+if anthropic_real and "total_usd" in anthropic_real:
+    anthropic_display_usd  = anthropic_real["total_usd"]
+    anthropic_source_label = "✅ Echte Daten (Anthropic Cost API)"
+    anthropic_breakdown    = anthropic_real["breakdown"]
+else:
+    anthropic_display_usd  = anthropic_est["total"]
+    anthropic_source_label = "⚠️ Schätzung aus Log (kein Admin Key)"
+    anthropic_breakdown    = {}
 
 # EXA: Kosten über Battle Cards schätzen (jede Battle Card ≈ 5 EXA-Suchanfragen)
 exa_searches_est = counts["battlecard_calls"] * 5
@@ -188,16 +241,16 @@ exa_cost_est     = exa_searches_est * EXA_PER_SEARCH
 total_leads   = sb_count("leads") or 0
 total_meddpicc= sb_count("meddpicc_scores") or 0
 
-total_variable_usd = anthropic["total"] + exa_cost_est
+total_variable_usd = anthropic_display_usd + exa_cost_est
 total_fixed_eur    = sum(v["eur"] for v in FIXED_COSTS.values())
 
 # ── KPI Row ───────────────────────────────────────────────────────────────────
 st.markdown("---")
 k1, k2, k3, k4, k5 = st.columns(5)
 with k1:
-    st.metric("🤖 Claude Calls", f"{anthropic['haiku_calls'] + anthropic['sonnet_calls']}")
+    st.metric("🤖 Claude Calls", f"{anthropic_est['haiku_calls'] + anthropic_est['sonnet_calls']}")
 with k2:
-    st.metric("💵 Anthropic", f"${anthropic['total']:.3f}")
+    st.metric("💵 Anthropic", f"${anthropic_display_usd:.3f}")
 with k3:
     st.metric("🔍 EXA Searches ~", f"{exa_searches_est}")
 with k4:
@@ -211,35 +264,57 @@ st.markdown("---")
 col_a, col_b = st.columns([2, 1])
 with col_a:
     st.subheader("🤖 Anthropic API")
-    a1, a2, a3 = st.columns(3)
-    with a1:
-        st.markdown(f"""<div class="metric-card">
-        <div style="color:#94a3b8;font-size:.85rem">Intent Router</div>
-        <div style="font-size:1.6rem;font-weight:600;color:#60a5fa">{counts['intent_calls']}</div>
-        <div class="small-note">Claude Haiku · ~{counts['intent_calls']*T_INTENT['in']//1000}k tokens</div>
-        </div>""", unsafe_allow_html=True)
-    with a2:
-        st.markdown(f"""<div class="metric-card">
-        <div style="color:#94a3b8;font-size:.85rem">Lead Analysis</div>
-        <div style="font-size:1.6rem;font-weight:600;color:#60a5fa">{counts['analysis_calls']}</div>
-        <div class="small-note">Claude Haiku · ~{counts['analysis_calls']*T_ANALYSIS['in']//1000}k tokens</div>
-        </div>""", unsafe_allow_html=True)
-    with a3:
-        st.markdown(f"""<div class="metric-card">
-        <div style="color:#94a3b8;font-size:.85rem">Battle Cards</div>
-        <div style="font-size:1.6rem;font-weight:600;color:#60a5fa">{counts['battlecard_calls']}</div>
-        <div class="small-note">Claude Sonnet · ~{counts['battlecard_calls']*T_BATTLECARD['in']//1000}k tokens</div>
-        </div>""", unsafe_allow_html=True)
+    st.caption(anthropic_source_label)
+
+    if anthropic_real and "total_usd" in anthropic_real and anthropic_breakdown:
+        # Echte Daten: zeige Top-Modelle
+        sorted_models = sorted(anthropic_breakdown.items(), key=lambda x: x[1], reverse=True)
+        model_cols = st.columns(max(len(sorted_models), 1))
+        for i, (model, cost) in enumerate(sorted_models[:4]):
+            short = model.split("-")[1] if "-" in model else model
+            with model_cols[i % len(model_cols)]:
+                st.markdown(f"""<div class="metric-card">
+                <div style="color:#94a3b8;font-size:.8rem">{model[:30]}</div>
+                <div style="font-size:1.4rem;font-weight:600;color:#60a5fa">${cost:.3f}</div>
+                <div class="small-note">≈ €{cost*EUR_PER_USD:.2f}</div>
+                </div>""", unsafe_allow_html=True)
+    else:
+        # Schätzung aus Log
+        a1, a2, a3 = st.columns(3)
+        with a1:
+            st.markdown(f"""<div class="metric-card">
+            <div style="color:#94a3b8;font-size:.85rem">Intent Router</div>
+            <div style="font-size:1.6rem;font-weight:600;color:#60a5fa">{counts['intent_calls']}</div>
+            <div class="small-note">Claude Haiku · ~{counts['intent_calls']*T_INTENT['in']//1000}k tokens</div>
+            </div>""", unsafe_allow_html=True)
+        with a2:
+            st.markdown(f"""<div class="metric-card">
+            <div style="color:#94a3b8;font-size:.85rem">Lead Analysis</div>
+            <div style="font-size:1.6rem;font-weight:600;color:#60a5fa">{counts['analysis_calls']}</div>
+            <div class="small-note">Claude Haiku · ~{counts['analysis_calls']*T_ANALYSIS['in']//1000}k tokens</div>
+            </div>""", unsafe_allow_html=True)
+        with a3:
+            st.markdown(f"""<div class="metric-card">
+            <div style="color:#94a3b8;font-size:.85rem">Battle Cards</div>
+            <div style="font-size:1.6rem;font-weight:600;color:#60a5fa">{counts['battlecard_calls']}</div>
+            <div class="small-note">Claude Sonnet · ~{counts['battlecard_calls']*T_BATTLECARD['in']//1000}k tokens</div>
+            </div>""", unsafe_allow_html=True)
+        # Hinweis auf Admin Key
+        st.info("💡 Für echte Kosten: `ANTHROPIC_ADMIN_KEY=sk-ant-admin...` in `.env` eintragen → [console.anthropic.com/settings/api-keys](https://console.anthropic.com/settings/api-keys)")
 
 with col_b:
-    cc = color_cost(anthropic["total"])
-    st.markdown(f"""<div class="metric-card" style="height:100%">
-    <div style="color:#94a3b8;font-size:.85rem">Geschätzte Kosten ({month_label})</div>
-    <div style="font-size:2rem;font-weight:700" class="{cc}">${anthropic['total']:.3f}</div>
-    <div class="small-note">Haiku: ${anthropic['haiku_cost']:.3f}</div>
-    <div class="small-note">Sonnet: ${anthropic['sonnet_cost']:.3f}</div>
-    <div class="small-note" style="margin-top:.5rem">≈ €{anthropic['total']*EUR_PER_USD:.2f}</div>
-    </div>""", unsafe_allow_html=True)
+    cc = color_cost(anthropic_display_usd)
+    error_note = f'<div class="small-note" style="color:#f87171">{anthropic_real.get("error","")}</div>' if (anthropic_real and "error" in anthropic_real) else ""
+    haiku_line  = f'<div class="small-note">Haiku: ${anthropic_est["haiku_cost"]:.3f}</div>'  if not (anthropic_real and "total_usd" in anthropic_real) else ""
+    sonnet_line = f'<div class="small-note">Sonnet: ${anthropic_est["sonnet_cost"]:.3f}</div>' if not (anthropic_real and "total_usd" in anthropic_real) else ""
+    st.markdown(
+        f'<div class="metric-card" style="height:100%">'
+        f'<div style="color:#94a3b8;font-size:.85rem">Kosten {month_label}</div>'
+        f'<div style="font-size:2rem;font-weight:700" class="{cc}">${anthropic_display_usd:.3f}</div>'
+        f'{haiku_line}{sonnet_line}'
+        f'<div class="small-note" style="margin-top:.5rem">≈ €{anthropic_display_usd*EUR_PER_USD:.2f}</div>'
+        f'{error_note}</div>',
+        unsafe_allow_html=True)
 
 st.markdown("---")
 
