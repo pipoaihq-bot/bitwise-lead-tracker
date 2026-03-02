@@ -16,7 +16,9 @@ import urllib.request, urllib.parse
 # ── Config ────────────────────────────────────────────────────────────────────
 SUPABASE_URL       = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY       = os.environ.get("SUPABASE_KEY", "")
-ANTHROPIC_ADMIN_KEY= os.environ.get("ANTHROPIC_ADMIN_KEY", "")  # sk-ant-admin...
+ANTHROPIC_ADMIN_KEY       = os.environ.get("ANTHROPIC_ADMIN_KEY", "")   # sk-ant-admin...
+ANTHROPIC_CREDITS_BOUGHT  = float(os.environ.get("ANTHROPIC_CREDITS_BOUGHT",  "91.31"))  # Summe aller Credit Grants
+ANTHROPIC_CREDIT_BALANCE  = float(os.environ.get("ANTHROPIC_CREDIT_BALANCE",  "23.14"))  # Aktuelles Guthaben
 BOT_LOG            = Path("/tmp/pipo_bot.log")
 
 # Pricing (USD, Stand 2026 — ggf. anpassen)
@@ -300,19 +302,24 @@ with col_a:
             <div class="small-note">Claude Sonnet · ~{counts['battlecard_calls']*T_BATTLECARD['in']//1000}k tokens</div>
             </div>""", unsafe_allow_html=True)
         # Hinweis auf Admin Key
-        st.info("💡 Für echte Kosten: `ANTHROPIC_ADMIN_KEY=sk-ant-admin...` in `.env` eintragen → [console.anthropic.com/settings/api-keys](https://console.anthropic.com/settings/api-keys)")
+        st.warning("⚠️ Individual Account — keine Cost API verfügbar. Echten Verbrauch ansehen: [console.anthropic.com](https://console.anthropic.com) → Workbench → Analytics → **Cost**")
 
 with col_b:
     cc = color_cost(anthropic_display_usd)
+    total_spent = max(0.0, ANTHROPIC_CREDITS_BOUGHT - ANTHROPIC_CREDIT_BALANCE)
     error_note = f'<div class="small-note" style="color:#f87171">{anthropic_real.get("error","")}</div>' if (anthropic_real and "error" in anthropic_real) else ""
     haiku_line  = f'<div class="small-note">Haiku: ${anthropic_est["haiku_cost"]:.3f}</div>'  if not (anthropic_real and "total_usd" in anthropic_real) else ""
     sonnet_line = f'<div class="small-note">Sonnet: ${anthropic_est["sonnet_cost"]:.3f}</div>' if not (anthropic_real and "total_usd" in anthropic_real) else ""
     st.markdown(
         f'<div class="metric-card" style="height:100%">'
-        f'<div style="color:#94a3b8;font-size:.85rem">Kosten {month_label}</div>'
+        f'<div style="color:#94a3b8;font-size:.85rem">Kosten {month_label} (geschätzt)</div>'
         f'<div style="font-size:2rem;font-weight:700" class="{cc}">${anthropic_display_usd:.3f}</div>'
         f'{haiku_line}{sonnet_line}'
         f'<div class="small-note" style="margin-top:.5rem">≈ €{anthropic_display_usd*EUR_PER_USD:.2f}</div>'
+        f'<div style="border-top:1px solid #334155;margin:.7rem 0"></div>'
+        f'<div style="color:#94a3b8;font-size:.8rem">Gesamt verbraucht (seit Start)</div>'
+        f'<div style="font-size:1.4rem;font-weight:700;color:#f87171">${total_spent:.2f}</div>'
+        f'<div class="small-note">Guthaben: ${ANTHROPIC_CREDIT_BALANCE:.2f} · Gekauft: ${ANTHROPIC_CREDITS_BOUGHT:.2f}</div>'
         f'{error_note}</div>',
         unsafe_allow_html=True)
 
