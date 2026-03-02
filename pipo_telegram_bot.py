@@ -691,7 +691,6 @@ def handle_add_lead(chat_id, args_text="", auto_strategy=False, parsed=None):
         "region":         region,
         "tier":           tier,
         "stage":          "prospecting",
-        "source":         "Pipo Bot",
     }
     try:
         result = db_create_lead(data)
