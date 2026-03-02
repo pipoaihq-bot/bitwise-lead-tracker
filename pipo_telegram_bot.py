@@ -135,8 +135,28 @@ def tg_get_updates(offset=0):
 # ── LinkedIn ──────────────────────────────────────────────────────────────────
 _li_api = None
 
+_li_cookie_expired = False  # Flag, damit wir die Warnung nur 1x senden
+
+def _check_li_at_valid(sess):
+    """Prüft ob li_at Cookie noch gültig ist (kein Redirect-Loop = gültig)."""
+    try:
+        import requests as _req
+        resp = sess.get(
+            "https://www.linkedin.com/voyager/api/identity/profiles/me",
+            allow_redirects=False,
+            timeout=10,
+        )
+        # 200 = gültig; 302 zu sich selbst = abgelaufen
+        if resp.status_code == 302:
+            location = resp.headers.get("Location", "")
+            if "voyager/api" in location or "login" in location or location.endswith("/me"):
+                return False
+        return resp.status_code == 200
+    except Exception:
+        return False  # bei Fehler: lieber fortfahren als abbrechen
+
 def get_linkedin_api():
-    global _li_api
+    global _li_api, _li_cookie_expired
     if _li_api:
         return _li_api
     if not LINKEDIN_LI_AT:
@@ -145,11 +165,39 @@ def get_linkedin_api():
         from linkedin_api import Linkedin
         _li_api = Linkedin("", "", authenticate=False)
         sess = _li_api.client.session
+        ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        sess.headers.update({"User-Agent": ua})
         sess.cookies.set("li_at", LINKEDIN_LI_AT, domain=".linkedin.com")
-        sess.get("https://www.linkedin.com/", headers={"User-Agent": "Mozilla/5.0"})
-        jsid = sess.cookies.get("JSESSIONID", "")
+
+        # Cookie-Validity-Check — warnt wenn abgelaufen
+        if not _check_li_at_valid(sess):
+            if not _li_cookie_expired:
+                _li_cookie_expired = True
+                tg_send(TELEGRAM_CHAT,
+                    "⚠️ <b>LinkedIn Cookie abgelaufen!</b>\n\n"
+                    "Der <code>li_at</code> Cookie ist nicht mehr gültig.\n\n"
+                    "<b>Neu holen (2 min):</b>\n"
+                    "1. Chrome → linkedin.com (einloggen)\n"
+                    "2. F12 → Application → Cookies → linkedin.com\n"
+                    "3. <code>li_at</code> Wert kopieren\n"
+                    "4. In <code>.env</code> ersetzen: <code>export LINKEDIN_LI_AT=\"neuer_wert\"</code>\n"
+                    "5. Bot neu starten: <code>python3 pipo_telegram_bot.py --install</code>"
+                )
+            log("LinkedIn li_at abgelaufen")
+            _li_api = None
+            return None
+        _li_cookie_expired = False
+
+        # JSESSIONID für CSRF holen
+        try:
+            resp = sess.get("https://www.linkedin.com/feed/", allow_redirects=False, timeout=10)
+            jsid = sess.cookies.get("JSESSIONID", "") or resp.cookies.get("JSESSIONID", "")
+        except Exception:
+            jsid = sess.cookies.get("JSESSIONID", "")
         if jsid:
-            sess.headers.update({"csrf-token": jsid})
+            clean_jsid = jsid.strip('"')
+            sess.cookies.set("JSESSIONID", clean_jsid, domain=".linkedin.com")
+            sess.headers.update({"csrf-token": clean_jsid})
         return _li_api
     except Exception as e:
         log(f"LinkedIn auth error: {e}")
