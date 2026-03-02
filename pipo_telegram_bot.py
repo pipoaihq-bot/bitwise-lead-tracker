@@ -42,6 +42,11 @@ DASHBOARD_URL  = "https://pipo-bitwise-lead-tracker.streamlit.app"
 POLL_INTERVAL  = 2   # Sekunden zwischen getUpdates-Aufrufen
 LOG_FILE       = Path("/tmp/pipo_bot.log")
 
+# ── Kontext-Gedächtnis pro Chat ───────────────────────────────────────────────
+# Merkt sich den zuletzt diskutierten Lead pro chat_id
+# { chat_id: {"li_url": ..., "name": ..., "company": ..., "profile": ..., "db_lead": ...} }
+_context: dict = {}
+
 # ── Utils ─────────────────────────────────────────────────────────────────────
 def log(msg):
     ts = datetime.now().strftime("%H:%M:%S")
@@ -326,6 +331,21 @@ Antworte in 2-3 Sätzen:
 
 # ── Command Handlers ──────────────────────────────────────────────────────────
 
+def set_context(chat_id, li_url="", name="", company="", profile=None, db_lead=None):
+    """Speichert letzten Lead-Kontext für diesen Chat."""
+    _context[str(chat_id)] = {
+        "li_url": li_url, "name": name, "company": company,
+        "profile": profile, "db_lead": db_lead, "ts": time.time()
+    }
+
+def get_context(chat_id):
+    """Gibt Kontext zurück falls < 30 Minuten alt."""
+    ctx = _context.get(str(chat_id))
+    if ctx and (time.time() - ctx.get("ts", 0)) < 1800:
+        return ctx
+    return None
+
+
 def handle_linkedin_lookup(chat_id, text, li_url):
     """Hauptfeature: LinkedIn URL → DB-Check + Profil + AI-Einschätzung."""
     tg_send(chat_id, f"🔍 Prüfe <code>{li_url}</code>...")
@@ -386,9 +406,13 @@ def handle_linkedin_lookup(chat_id, text, li_url):
         msg += f"\n\n🤖 <i>{ai_note}</i>"
 
     if not is_in_db and profile:
-        msg += f"\n\n<b>Hinzufügen?</b> Antworte mit:\n<code>/add {li_url} {company} DE Tier1</code>"
+        msg += f"\n\n💡 <b>Aktionen:</b>\n<code>hinzufügen</code> — Lead in DB anlegen\n<code>hinzufügen + strategie</code> — anlegen & Battle Card generieren"
     elif is_in_db:
-        msg += f"\n\n<a href='{DASHBOARD_URL}'>📊 Dashboard öffnen</a>"
+        msg += f"\n\n💡 <code>strategie</code> — Battle Card generieren\n<a href='{DASHBOARD_URL}'>📊 Dashboard</a>"
+
+    # Kontext für Folgebefehle merken
+    set_context(chat_id, li_url=li_url, name=name, company=company,
+                profile=profile, db_lead=db_lead if is_in_db else None)
 
     tg_send(chat_id, msg)
 
@@ -441,9 +465,10 @@ def handle_status(chat_id, company_query):
     tg_send(chat_id, msg)
 
 
-def handle_add_lead(chat_id, args_text):
-    """Fügt neuen Lead hinzu: /add [linkedin_url] [company] [region] [tier]"""
-    parts = args_text.strip().split()
+def handle_add_lead(chat_id, args_text, auto_strategy=False):
+    """Fügt neuen Lead hinzu. Nutzt Kontext wenn kein Argument angegeben."""
+    args_text = args_text.strip()
+    parts = args_text.split()
     li_url  = ""
     company = ""
     region  = "DE"
@@ -457,12 +482,22 @@ def handle_add_lead(chat_id, args_text):
         elif p.lower().startswith("tier"):
             try: tier = int(p[-1])
             except: pass
-        elif not company:
+        elif not company and not p.startswith("/"):
             company = p
 
+    # Kein Argument? → Kontext nutzen
     if not li_url and not company:
-        tg_send(chat_id, "❌ Usage: /add [linkedin_url] [company] [region] [Tier1/2/3]")
-        return
+        ctx = get_context(chat_id)
+        if ctx:
+            li_url  = ctx.get("li_url", "")
+            company = ctx.get("company", "")
+            name    = ctx.get("name", "")
+            if not li_url and not company:
+                tg_send(chat_id, "❌ Kein Lead im Kontext. Schick zuerst eine LinkedIn URL.")
+                return
+        else:
+            tg_send(chat_id, "❌ Kein Lead im Kontext.\nUsage: <code>/add [linkedin_url] [Firma] [Region] [Tier1/2/3]</code>")
+            return
 
     # LinkedIn-Profil holen falls URL vorhanden
     profile = linkedin_get_profile_from_url(li_url) if li_url else None
@@ -488,16 +523,23 @@ def handle_add_lead(chat_id, args_text):
     }
     result = db_create_lead(data)
     if result:
+        new_id = result[0].get("id") if isinstance(result, list) else result.get("id")
         msg = f"""✅ <b>{company}</b> hinzugefügt!
 
-👤 {contact_name or '—'}
+👤 {contact_name or '—'} · {contact_title or '—'}
 📍 {region} · Tier {tier}
 🎯 Stage: prospecting
+{"🔗 " + li_url if li_url else ""}
 
 <a href='{DASHBOARD_URL}'>📊 Dashboard</a>"""
+        tg_send(chat_id, msg)
+        # Kontext updaten
+        set_context(chat_id, li_url=li_url, name=contact_name, company=company)
+        # Auto-Strategie falls angefordert
+        if auto_strategy:
+            handle_battle_card(chat_id, company)
     else:
-        msg = f"❌ Fehler beim Anlegen von {company}. Lead bereits vorhanden?"
-    tg_send(chat_id, msg)
+        tg_send(chat_id, f"⚠️ <b>{company}</b> möglicherweise bereits in DB.\n\n/status {company}")
 
 
 def handle_battle_card(chat_id, company_query):
@@ -558,21 +600,43 @@ def process_message(chat_id, text):
         handle_linkedin_lookup(chat_id, text, li_match.group(0).rstrip("/.,!?"))
         return
 
-    # /add
-    if text_lower.startswith("/add ") or text_lower.startswith("add "):
-        args = text.split(" ", 1)[1] if " " in text else ""
-        handle_add_lead(chat_id, args)
+    # /add oder "hinzufügen" — mit oder ohne Argumente, mit oder ohne Strategie
+    want_strategy = any(w in text_lower for w in ["strategie", "strategy", "battle card", "battlecard"])
+    if (text_lower.startswith("/add") or text_lower.startswith("add ")
+            or any(w in text_lower for w in ["hinzufügen", "hinzufuegen", "füge hinzu", "fueg hinzu",
+                                              "add lead", "hinzufügen", "eintragen", "in db"])):
+        # Argumente: alles nach dem ersten Wort/Befehl
+        args = ""
+        for prefix in ("/add ", "add ", "hinzufügen ", "hinzufuegen ", "füge hinzu ", "fueg hinzu "):
+            if text_lower.startswith(prefix):
+                args = text[len(prefix):]
+                break
+        handle_add_lead(chat_id, args, auto_strategy=want_strategy)
         return
 
-    # /card oder "battle card"
+    # /card, "battle card" oder "strategie" — mit oder ohne Firmenname
     if text_lower.startswith("/card "):
         handle_battle_card(chat_id, text[6:].strip())
         return
-    if "battle card" in text_lower or "battlecard" in text_lower:
-        query = re.sub(r'battle\s*card\s*(für|for|von|about)?', '', text, flags=re.IGNORECASE).strip()
+    if text_lower in ("strategie", "strategy", "/card", "battle card", "battlecard"):
+        # Kein Firmenname angegeben → Kontext nutzen
+        ctx = get_context(chat_id)
+        if ctx and ctx.get("company"):
+            handle_battle_card(chat_id, ctx["company"])
+        else:
+            tg_send(chat_id, "❓ Für welche Firma? Schick zuerst eine LinkedIn URL oder:\n<code>/card Firmenname</code>")
+        return
+    if "battle card" in text_lower or "battlecard" in text_lower or "strategie" in text_lower:
+        query = re.sub(r'(battle\s*card|battlecard|strategie|strategy)\s*(für|for|von|about|zu)?', '', text, flags=re.IGNORECASE).strip()
         if query:
             handle_battle_card(chat_id, query)
-            return
+        else:
+            ctx = get_context(chat_id)
+            if ctx and ctx.get("company"):
+                handle_battle_card(chat_id, ctx["company"])
+            else:
+                tg_send(chat_id, "❓ Für welche Firma?\n<code>/card Firmenname</code>")
+        return
 
     # /top oder "top leads"
     if text_lower.startswith("/top"):
@@ -621,8 +685,12 @@ def process_message(chat_id, text):
         handle_help(chat_id)
         return
 
-    # Fallback
-    tg_send(chat_id, f"🤔 Nicht verstanden. Schick mir eine LinkedIn URL oder /help für alle Befehle.")
+    # Fallback — zeige Kontext falls vorhanden
+    ctx = get_context(chat_id)
+    ctx_hint = ""
+    if ctx and ctx.get("company"):
+        ctx_hint = f"\n\n💡 Letzter Lead: <b>{ctx['company']}</b>\n<code>hinzufügen</code> · <code>strategie</code> · <code>/status {ctx['company']}</code>"
+    tg_send(chat_id, f"🤔 Nicht verstanden.{ctx_hint}\n\n/help — alle Befehle")
 
 
 # ── Main Loop ─────────────────────────────────────────────────────────────────
