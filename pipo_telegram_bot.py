@@ -542,6 +542,45 @@ def handle_add_lead(chat_id, args_text, auto_strategy=False):
         tg_send(chat_id, f"⚠️ <b>{company}</b> möglicherweise bereits in DB.\n\n/status {company}")
 
 
+def handle_find_contacts(chat_id, role, company):
+    """Sales Navigator-ähnlich: Findet Entscheider nach Rolle bei einer Firma."""
+    tg_send(chat_id, f"🔍 Suche <b>{role}</b> bei <b>{company}</b> auf LinkedIn...")
+    api = get_linkedin_api()
+    if not api:
+        tg_send(chat_id, "⚠️ LinkedIn nicht verfügbar.")
+        return
+    try:
+        results = api.search_people(
+            keyword_title=role,
+            keyword_company=company,
+            limit=5,
+        ) or []
+        if not results:
+            tg_send(chat_id, f"❌ Keine LinkedIn-Profile für <b>{role}</b> bei <b>{company}</b> gefunden.")
+            return
+
+        prio = {"DISTANCE_1": 0, "DISTANCE_2": 1, "DISTANCE_3": 2}
+        results.sort(key=lambda x: prio.get(x.get("distance", "DISTANCE_3"), 3))
+
+        lines = [f"👥 <b>{role} bei {company}</b>\n"]
+        for r in results[:5]:
+            name     = r.get("name", "?")
+            jobtitle = r.get("jobtitle", "—")
+            distance = r.get("distance", "DISTANCE_3")
+            pub_id   = r.get("publicIdentifier") or r.get("public_id", "")
+            degree   = "1st ✅" if distance == "DISTANCE_1" else "2nd 🔵" if distance == "DISTANCE_2" else "3rd ❄️"
+            li_link  = f' · <a href="https://linkedin.com/in/{pub_id}">Profil</a>' if pub_id else ""
+            lines.append(f"• <b>{name}</b> ({degree})\n  {jobtitle}{li_link}")
+
+        lines.append(f"\n💡 <code>hinzufügen</code> oder /card {company}")
+        tg_send(chat_id, "\n".join(lines))
+        # Kontext auf Firma setzen
+        set_context(chat_id, company=company)
+    except Exception as e:
+        log(f"handle_find_contacts error: {e}")
+        tg_send(chat_id, f"❌ LinkedIn Fehler: {str(e)[:200]}")
+
+
 def handle_battle_card(chat_id, company_query):
     """Startet Battle Card Generierung für eine Firma."""
     tg_send(chat_id, f"⚔️ Starte Battle Card für <b>{company_query}</b>...\n(~2 Minuten)")
@@ -572,15 +611,22 @@ def handle_help(chat_id):
 → DB-Check + Profil + AI-Einschätzung
 
 <b>Explizite Befehle:</b>
-/top [n]          — Top N Leads (default: 5)
-/status [firma]   — Lead-Status + MEDDPICC
-/card [firma]     — Battle Card generieren
-/add [url] [firma] [Region] [Tier] — Lead anlegen
+/top [n]                        — Top N Leads (default: 5)
+/status [firma]                 — Lead-Status + MEDDPICC
+/card [firma]                   — Battle Card generieren
+/add [url] [firma] [Region]     — Lead anlegen
+/find [rolle] bei [firma]       — Entscheider auf LinkedIn suchen
 
-<b>Natürliche Sprache:</b>
-"haben wir [name/firma]?" → DB-Suche
-"zeig mir die top leads"  → /top
-"battle card für [firma]" → /card
+<b>Sales Navigator (natürliche Sprache):</b>
+"wer ist CTO bei Euler Hermes?"   → LinkedIn Suche
+"finde Entscheider bei DDA"       → C-Level Suche
+"entscheider bei [firma]"         → Gleich
+
+<b>Weitere Befehle:</b>
+"haben wir [name/firma]?"  → DB-Suche
+"zeig mir die top leads"   → /top
+"battle card für [firma]"  → /card
+"hinzufügen + strategie"   → Add + Battle Card
 
 <a href='https://pipo-bitwise-lead-tracker.streamlit.app'>📊 Dashboard</a>"""
     tg_send(chat_id, msg)
@@ -598,6 +644,26 @@ def process_message(chat_id, text):
     li_match = LINKEDIN_REGEX.search(text)
     if li_match:
         handle_linkedin_lookup(chat_id, text, li_match.group(0).rstrip("/.,!?"))
+        return
+
+    # /find [Rolle] bei [Firma] — Sales Navigator: Entscheider suchen
+    # z.B. "/find CFO bei Deutsche Digital Assets" oder "wer ist CTO bei Euler Hermes?"
+    find_match = None
+    if text_lower.startswith("/find "):
+        find_rest = text[6:].strip()
+        m = re.search(r'^(.+?)\s+(?:bei|at|@|von|from)\s+(.+)$', find_rest, re.IGNORECASE)
+        if m:
+            find_match = (m.group(1).strip(), m.group(2).strip())
+    if not find_match:
+        m = re.search(r'(?:wer ist|wer sind|finde?|suche?)\s+(?:der\s+|die\s+|den\s+)?(.+?)\s+(?:bei|at|@|von|from)\s+(.+?)[\?!.]?$', text_lower)
+        if m:
+            find_match = (m.group(1).strip(), m.group(2).strip())
+    if not find_match:
+        m = re.search(r'(?:entscheider|decision maker|kontakte?|contacts?)\s+(?:bei|at|@|von|from)\s+(.+?)[\?!.]?$', text_lower)
+        if m:
+            find_match = ("Managing Director CIO CFO", m.group(1).strip())
+    if find_match:
+        handle_find_contacts(chat_id, find_match[0], find_match[1])
         return
 
     # /add oder "hinzufügen" — mit oder ohne Argumente, mit oder ohne Strategie

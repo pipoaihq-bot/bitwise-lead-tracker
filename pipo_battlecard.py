@@ -251,6 +251,93 @@ def linkedin_enrich_contact(contact_name, company):
         return None
 
 
+def linkedin_find_decision_makers(company_urn, company_name, top_roles=None):
+    """
+    Sales Navigator-ähnliche Suche: C-Level / VP / Head-of bei einer Firma.
+    Nutzt search_people(keyword_title=..., keyword_company=...) — kein Sales Navigator Abo nötig.
+    Gibt Liste zurück sortiert nach Degree (1st → 2nd → 3rd+).
+    """
+    api = _linkedin_api()
+    if not api:
+        return []
+    if top_roles is None:
+        top_roles = [
+            "Managing Director", "CIO", "CFO", "CTO",
+            "Head of Digital Assets", "Head of Treasury",
+            "Director", "Portfolio Manager",
+        ]
+    found = []
+    seen_names = set()
+    for role in top_roles[:4]:  # max 4 Suchen → Rate Limit schonen
+        try:
+            results = api.search_people(
+                keyword_title=role,
+                keyword_company=company_name,
+                limit=3,
+            ) or []
+            for r in results:
+                name     = (r.get("name") or "").strip()
+                jobtitle = r.get("jobtitle", "")
+                distance = r.get("distance", "DISTANCE_3")
+                urn_id   = r.get("urn_id", "")
+                pub_id   = r.get("publicIdentifier") or r.get("public_id", "")
+                if not name or name in seen_names:
+                    continue
+                seen_names.add(name)
+                degree = "1st" if distance == "DISTANCE_1" else "2nd" if distance == "DISTANCE_2" else "3rd+"
+                found.append({
+                    "name":       name,
+                    "title":      jobtitle,
+                    "distance":   distance,
+                    "degree":     degree,
+                    "urn_id":     urn_id,
+                    "public_id":  pub_id,
+                    "profile_url": f"https://linkedin.com/in/{pub_id}" if pub_id else "",
+                })
+        except Exception:
+            pass
+        time.sleep(0.5)
+    prio = {"DISTANCE_1": 0, "DISTANCE_2": 1, "DISTANCE_3": 2}
+    found.sort(key=lambda x: prio.get(x["distance"], 3))
+    return found[:8]
+
+
+def linkedin_get_company_news(company_public_id):
+    """
+    Holt aktuelle LinkedIn Company Updates als Conversation Starter.
+    company_public_id: z.B. "deutsche-digital-assets" (aus get_company URL).
+    """
+    api = _linkedin_api()
+    if not api or not company_public_id:
+        return []
+    try:
+        updates = api.get_company_updates(public_id=str(company_public_id), max_results=5) or []
+        news = []
+        for u in updates[:5]:
+            text = ""
+            try:
+                commentary = u.get("commentary") or {}
+                if isinstance(commentary, dict):
+                    inner = commentary.get("text", {})
+                    text = inner.get("text", "") if isinstance(inner, dict) else str(inner)
+                elif isinstance(commentary, str):
+                    text = commentary
+            except Exception:
+                pass
+            if text and len(str(text)) > 20:
+                news.append({
+                    "title":     "LinkedIn Company Post",
+                    "text":      str(text)[:300],
+                    "url":       f"https://linkedin.com/company/{company_public_id}/posts",
+                    "published": "",
+                    "author":    "",
+                })
+        return news
+    except Exception as e:
+        print(f"{Y}  [LinkedIn] Company News Fehler: {e}{X}")
+        return []
+
+
 def linkedin_get_company(company_name):
     """Holt LinkedIn-Firmendaten. Felder: urn_id, name, headline (Branche+HQ), subline (Follower)."""
     api = _linkedin_api()
@@ -335,6 +422,8 @@ def deep_research(lead):
         "regulatory_triggers": [],
         "mutual_connections": [],
         "linkedin_company": {},
+        "decision_makers": [],
+        "company_updates": [],
     }
 
     # 1. Company news — general (funding, partnerships, expansions, leadership)
@@ -432,6 +521,22 @@ def deep_research(lead):
             li_count += 1
             research["linkedin_company"] = li_co
 
+            # Decision Makers — C-Level / VP / Director bei dieser Firma suchen
+            co_urn = li_co.get("url", "").split("/company/")[-1].rstrip("/") if li_co.get("url") else ""
+            dm = linkedin_find_decision_makers(co_urn, company)
+            if dm:
+                research["decision_makers"] = dm
+                li_count += 1
+
+            # Company News/Updates — conversation starters
+            # public_id aus URL ableiten (linkedin.com/company/SLUG)
+            co_public_id = li_co.get("url", "").split("/company/")[-1].rstrip("/") if li_co.get("url") else ""
+            if co_public_id:
+                cn = linkedin_get_company_news(co_public_id)
+                if cn:
+                    research["company_updates"] = cn
+                    li_count += 1
+
         print(f" {G}✓{X} ({li_count} LinkedIn Quellen)")
 
     return research
@@ -499,6 +604,26 @@ def generate_battlecard(lead, research):
     else:
         li_co_text = "LINKEDIN FIRMENDATEN: Nicht verfügbar"
 
+    # Decision Makers
+    dm_list = research.get("decision_makers", [])
+    if dm_list:
+        dm_text = "ENTSCHEIDER BEI DIESER FIRMA (LinkedIn Navigator):\n" + "\n".join(
+            f"  • {d['name']} — {d.get('title','')} ({d['degree']}-degree)"
+            + (f"  → WARM: {d['name']} ist 1st-degree, Philipp kennt diese Person!" if d['degree'] == "1st" else "")
+            for d in dm_list
+        )
+    else:
+        dm_text = "ENTSCHEIDER: Keine gefunden via LinkedIn Navigator"
+
+    # Company Updates / Conversation Starters
+    cu_list = research.get("company_updates", [])
+    if cu_list:
+        cu_text = "AKTUELLE LINKEDIN COMPANY POSTS (Conversation Starters):\n" + "\n".join(
+            f"  • {p.get('text','')[:150]}" for p in cu_list[:3]
+        )
+    else:
+        cu_text = "COMPANY UPDATES: Keine LinkedIn Posts gefunden"
+
     research_text = "\n\n".join([
         format_results(research["company_news"],        "COMPANY NEWS"),
         format_results(research["crypto_relevance"],    "CRYPTO/STAKING RELEVANZ"),
@@ -508,6 +633,8 @@ def generate_battlecard(lead, research):
         format_results(research["regulatory_triggers"], "REGULATORIK/MICA"),
         mutual_text,
         li_co_text,
+        dm_text,
+        cu_text,
     ])
 
     prompt = f"""Du bist Pipo, Senior Pre-Sales Analyst für Philipp Sandor (HEAD EMEA, Bitwise Asset Management, Dubai).
@@ -587,6 +714,7 @@ AUSGABE — NUR DIESES JSON-FORMAT, KEIN KOMMENTAR:
     "body": "Vollständiger Email-Body — direkt sendbar, kein Platzhalter"
   }},
   "mutual_connections": "Gemeinsame Verbindungen / Intro-Möglichkeit — aus den LinkedIn-Daten; falls keiner: 'Kein gemeinsamer Kontakt — kalt angehen'",
+  "key_contacts": "Top 2-3 Entscheider bei dieser Firma die Philipp ansprechen sollte — aus ENTSCHEIDER-Liste; mit Rolle und warum relevant",
   "linkedin_connect": "Kurzer LinkedIn Connection Request Text (max. 300 Zeichen) — persönlich, nicht generisch; falls gemeinsamer Kontakt vorhanden → namentlich erwähnen",
   "linkedin_inmail": "LinkedIn InMail Text — etwas länger als Email, gleiche Regeln",
   "call_agenda": "15-Minuten First Call Agenda — 3 Punkte die Philipp besprechen soll"
@@ -906,6 +1034,11 @@ def format_telegram_card(rank, lead, bc):
     mc = bc.get("mutual_connections", "")
     if mc and "kalt" not in mc.lower() and len(mc) > 5:
         msg += f"\n🤝 <b>INTRO:</b> {mc[:120]}\n"
+
+    # Key contacts / decision makers
+    kc = bc.get("key_contacts", "")
+    if kc and len(kc) > 5:
+        msg += f"\n👥 <b>ENTSCHEIDER:</b> {kc[:150]}\n"
 
     msg += f"""
 🩹 <b>PAIN:</b> {pain_str}
