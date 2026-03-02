@@ -505,24 +505,47 @@ class AlertService:
 
 def send_telegram_message(message: str, chat_id: str = TELEGRAM_CHAT_ID) -> bool:
     """
-    Sendet Nachricht über OpenClaw Gateway
+    Sendet Nachricht via direkter Telegram HTTP API (primär).
+    Fallback: OpenClaw Gateway.
+    Gateway-unabhängig — funktioniert auch wenn OpenClaw down ist.
     """
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+
+    # Primary: Direkte HTTP API (kein OpenClaw nötig)
+    if bot_token:
+        try:
+            import urllib.request
+            import json
+            url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+            payload = json.dumps({
+                "chat_id": chat_id,
+                "text": message,
+                "parse_mode": "Markdown"
+            }).encode("utf-8")
+            req = urllib.request.Request(url, data=payload,
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                if resp.status == 200:
+                    print(f"✅ Message sent via Telegram API (direct)")
+                    return True
+        except Exception as e:
+            print(f"⚠️ Direct Telegram API failed: {e} — trying OpenClaw fallback")
+
+    # Fallback: OpenClaw Gateway
     try:
         import subprocess
         result = subprocess.run(
             ['openclaw', 'message', 'send', '--target', chat_id, '--message', message],
-            capture_output=True,
-            text=True,
-            timeout=30
+            capture_output=True, text=True, timeout=30
         )
         if result.returncode == 0:
-            print(f"✅ Message sent successfully")
+            print(f"✅ Message sent via OpenClaw (fallback)")
             return True
         else:
-            print(f"❌ OpenClaw error: {result.stderr}")
+            print(f"❌ OpenClaw fallback error: {result.stderr}")
             return False
     except Exception as e:
-        print(f"❌ Failed to send: {e}")
+        print(f"❌ All send methods failed: {e}")
         return False
 
 
