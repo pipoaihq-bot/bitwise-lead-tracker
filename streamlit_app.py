@@ -253,6 +253,61 @@ def load_tasks():
     except:
         return pd.DataFrame()
 
+def get_pipo_daily_picks(df, n=5):
+    """Pipo's daily top picks — same algorithm as morning_briefing.py"""
+    if df.empty:
+        return pd.DataFrame()
+
+    STAGE_WEIGHTS = {
+        'negotiation': 1.0, 'validation': 0.9, 'solutioning': 0.8,
+        'discovery': 0.6, 'prospecting': 0.4, 'closed_won': 0.0, 'closed_lost': 0.0
+    }
+    REGION_PRIORITY = {'UAE': 1.1, 'DE': 1.0, 'CH': 1.0, 'UK': 0.95, 'NORDICS': 0.9}
+
+    active = df[~df["stage"].isin(["closed_won", "closed_lost"])].copy()
+
+    def _score(row):
+        meddpicc = int(row["meddpicc"])
+        deal_size = float(row.get("deal_size") or 0)
+        days = int(row.get("days_inactive") or 0)
+        stage = str(row.get("stage") or "prospecting").lower()
+        region = str(row.get("region") or "DE").upper()
+
+        meddpicc_c = (meddpicc / 80) * 40
+        if deal_size >= 50:   deal_c = 25
+        elif deal_size >= 20: deal_c = 20
+        elif deal_size >= 10: deal_c = 15
+        elif deal_size >= 5:  deal_c = 10
+        else: deal_c = min(5, deal_size) if deal_size else 2
+
+        if days <= 2:    act_c = 5
+        elif days <= 5:  act_c = 15
+        elif days <= 10: act_c = 20
+        elif days <= 21: act_c = 15
+        else:            act_c = 10
+
+        stage_c = STAGE_WEIGHTS.get(stage, 0.5) * 10
+        strat_c = REGION_PRIORITY.get(region, 0.9) * 5
+        return round(meddpicc_c + deal_c + act_c + stage_c + strat_c, 1)
+
+    def _action(row):
+        stage = str(row.get("stage") or "prospecting").lower()
+        days = int(row.get("days_inactive") or 0)
+        meddpicc = int(row["meddpicc"])
+        if days > 10 and meddpicc >= 50:
+            return "🔥 Dringend reaktivieren"
+        return {
+            'prospecting':  "📧 Cold Email / LinkedIn",
+            'discovery':    "📞 Discovery Call buchen",
+            'solutioning':  "📊 Solution Presentation",
+            'validation':   "✅ POC Timeline",
+            'negotiation':  "🤝 Deal closing",
+        }.get(stage, "📞 Follow-up")
+
+    active["priority_score"] = active.apply(_score, axis=1)
+    active["suggested_action"] = active.apply(_action, axis=1)
+    return active.nlargest(n, "priority_score")
+
 def pipo_chat(messages, df_stats):
     """Send message to Claude API as Pipo with Bitwise context."""
     try:
@@ -333,8 +388,8 @@ with st.sidebar:
 
 # ── Navigation ─────────────────────────────────────────────────────────────────
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-    "🏠 Dashboard", "🚨 Prioritäten", "📊 Pipeline",
-    "✅ Tasks", "📥 Import", "⚙️ MEDDPICC", "➕ Neuer Lead", "🤖 Pipo"
+    "🏠 Home", "🚨 Alerts", "📊 Pipeline",
+    "✅ Tasks", "📥 Import", "⚙️ Score", "➕ Lead", "🤖 Pipo"
 ])
 
 # ══════════════════════════════════════════════════════════════
@@ -357,80 +412,185 @@ with tab1:
     if df.empty:
         st.warning("Keine Daten. Leads müssen erst in Supabase migriert werden.")
     else:
-        c1, c2, c3, c4 = st.columns(4)
-        cards = [
-            (c1, f"{stats['total']:,}", "Leads gesamt",  "#22c55e", ""),
-            (c2, str(stats['qualified']), "Qualifiziert", "#6366f1", "purple"),
-            (c3, str(stats['stale']),     "Inaktiv >7T",  "#ef4444" if stats['stale'] > 0 else "#4a6080", "alert" if stats['stale'] > 0 else ""),
-            (c4, f"€{stats['pipeline']:.0f}M", "Pipeline", "#22c55e", ""),
+        # ── Metric Row ──────────────────────────────────────────
+        active = df[~df["stage"].isin(["closed_won", "closed_lost"])]
+        avg_meddpicc = int(active["meddpicc"].mean()) if not active.empty else 0
+        qual_rate = int(stats['qualified'] / max(stats['total'], 1) * 100)
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        metric_cards = [
+            (c1, f"{stats['total']:,}",       "Leads gesamt",    "#22c55e", ""),
+            (c2, str(stats['qualified']),       "Qualifiziert",    "#6366f1", "purple"),
+            (c3, f"{qual_rate}%",               "Qual.-Rate",      "#06b6d4", "purple"),
+            (c4, str(avg_meddpicc) + "/80",     "Ø MEDDPICC",     "#d4a660", "warn"),
+            (c5, str(stats['stale']),           "Inaktiv >7T",
+             "#ef4444" if stats['stale'] > 0 else "#4a6080",
+             "alert" if stats['stale'] > 0 else ""),
         ]
-        for col, val, label, color, cls in cards:
+        for col, val, label, color, cls in metric_cards:
             with col:
                 st.markdown(f"""<div class="metric-card {cls}">
                     <div class="metric-val" style="color:{color};">{val}</div>
                     <div class="metric-lbl">{label}</div>
                 </div>""", unsafe_allow_html=True)
 
+        # ── Pipo's Daily Picks ──────────────────────────────────
         st.markdown("---")
+        st.markdown("""
+        <div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:0.75rem;">
+            <div style="font-family:'Cormorant Garamond',serif;font-size:1.2rem;color:#fff;font-weight:300;">
+                🤖 Pipo's Picks für heute
+            </div>
+            <div style="font-size:0.6rem;color:#22c55e;text-transform:uppercase;letter-spacing:0.12em;
+                         background:#052e16;border:1px solid #166534;padding:2px 8px;border-radius:2px;">
+                Live · Morning Briefing Algo
+            </div>
+        </div>
+        <div style="font-size:0.72rem;color:#4a6080;margin-bottom:1rem;">
+            Top 5 Leads nach MEDDPICC · Deal Size · Inaktivität · Stage · Region
+        </div>
+        """, unsafe_allow_html=True)
 
-        # Critical Alerts
-        active = df[~df["stage"].isin(["closed_won", "closed_lost"])]
-        hot = active[(active["meddpicc"] >= 50) & (active["days_inactive"] >= 3)].sort_values(
-            ["meddpicc", "days_inactive"], ascending=[False, False]).head(3)
+        picks = get_pipo_daily_picks(df, n=5)
+        if not picks.empty:
+            pick_cols = st.columns(len(picks))
+            rank_emojis = ["🥇", "🥈", "🥉", "4.", "5."]
+            for i, (_, p) in enumerate(picks.iterrows()):
+                _, qc = qualify(int(p["meddpicc"]))
+                days = int(p.get("days_inactive") or 0)
+                urgency_color = "#22c55e" if days <= 3 else "#d4a660" if days <= 7 else "#ef4444"
+                deal_str = f"€{float(p.get('deal_size') or 0):.0f}M" if float(p.get('deal_size') or 0) >= 0.5 else "TBD"
+                li_link = f"<a href='{p['linkedin']}' target='_blank' style='color:#6366f1;font-size:0.65rem;'>↗ LinkedIn</a>" if p.get("linkedin") else ""
+                with pick_cols[i]:
+                    st.markdown(f"""
+                    <div style="background:#0f1c2e;border:1px solid rgba(34,197,94,0.18);
+                                border-top:2px solid #22c55e;border-radius:4px;
+                                padding:0.875rem 0.75rem;height:100%;position:relative;">
+                        <div style="font-size:0.65rem;color:#22c55e;letter-spacing:0.1em;
+                                     text-transform:uppercase;margin-bottom:0.4rem;">{rank_emojis[i]}</div>
+                        <div style="font-weight:600;font-size:0.85rem;color:#e8f0ff;
+                                     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+                                     margin-bottom:0.25rem;">{p['company'][:20]}</div>
+                        <div style="font-size:0.65rem;color:#4a6080;margin-bottom:0.5rem;">
+                            {p['region']} · T{int(p.get('tier',2) if p.get('tier') else 2)} · {p['stage']}
+                        </div>
+                        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:0.5rem;">
+                            <span class="score-badge {qc}" style="font-size:0.6rem;">{int(p['meddpicc'])}/80</span>
+                            <span style="font-size:0.65rem;color:{urgency_color};background:rgba(0,0,0,0.3);
+                                          padding:1px 6px;border-radius:2px;">{days}d</span>
+                        </div>
+                        <div style="font-size:0.7rem;color:#d4a660;margin-bottom:0.25rem;">{deal_str}</div>
+                        <div style="font-size:0.68rem;color:#a0b0c8;line-height:1.4;margin-bottom:0.4rem;">
+                            {p.get('suggested_action','📞 Follow-up')}
+                        </div>
+                        <div style="font-size:0.6rem;color:#1e3050;margin-bottom:0.25rem;">{li_link}</div>
+                        <div style="font-size:0.58rem;color:#1e3050;text-align:right;
+                                     position:absolute;bottom:6px;right:8px;">
+                            Score {p.get('priority_score','?')}
+                        </div>
+                    </div>""", unsafe_allow_html=True)
+        else:
+            st.info("Keine Picks verfügbar — Leads werden geladen...")
 
-        if not hot.empty:
-            st.markdown("### 🔥 Sofort-Prioritäten")
-            for _, r in hot.iterrows():
-                _, qc = qualify(int(r["meddpicc"]))
-                st.markdown(f"""
-                <div class="alert-card">
-                    <div class="alert-title">{r['company']} <span class="score-badge {qc}">{int(r['meddpicc'])}/80</span></div>
-                    <div class="alert-sub">👤 {r.get('contact_person') or 'N/A'} | {r['region']} | {r['stage']} | {int(r['days_inactive'])} Tage inaktiv</div>
-                </div>""", unsafe_allow_html=True)
-
+        # ── Charts Row ──────────────────────────────────────────
         st.markdown("---")
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns([2, 2, 3])
         with col1:
-            st.markdown("### Leads nach Region")
+            st.markdown("### Region")
             reg = df.groupby("region").size().reset_index(name="Count")
             fig = px.pie(reg, values="Count", names="region",
                          color_discrete_sequence=["#22c55e","#6366f1","#06b6d4","#a78bfa","#d4a660","#3b82f6","#f87171"], hole=0.55)
-            fig.update_layout(height=260, paper_bgcolor="rgba(0,0,0,0)", font_color="#d4dbe8",
-                              legend=dict(orientation="h", y=-0.3, font_size=10, font_color="#4a6080"),
-                              margin=dict(t=10, b=50, l=10, r=10))
+            fig.update_layout(height=220, paper_bgcolor="rgba(0,0,0,0)", font_color="#d4dbe8",
+                              legend=dict(orientation="h", y=-0.35, font_size=9, font_color="#4a6080"),
+                              margin=dict(t=5, b=55, l=5, r=5))
             st.plotly_chart(fig, use_container_width=True)
 
         with col2:
-            st.markdown("### MEDDPICC Verteilung")
+            st.markdown("### MEDDPICC")
             order = ["QUALIFIED","PROBABLE","POSSIBLE","UNQUALIFIED"]
-            qc = df["qualification"].value_counts()
+            qc_vals = df["qualification"].value_counts()
             fig = go.Figure(go.Bar(
-                x=order, y=[qc.get(o, 0) for o in order],
+                x=order, y=[qc_vals.get(o, 0) for o in order],
                 marker_color=["#22c55e","#6366f1","#d4a660","#1e3050"],
-                text=[qc.get(o, 0) for o in order], textposition="outside",
-                textfont=dict(color="#e5e5e5")
+                text=[qc_vals.get(o, 0) for o in order], textposition="outside",
+                textfont=dict(color="#e5e5e5", size=10)
             ))
-            fig.update_layout(height=260, paper_bgcolor="rgba(0,0,0,0)",
+            fig.update_layout(height=220, paper_bgcolor="rgba(0,0,0,0)",
                               plot_bgcolor="rgba(0,0,0,0)", font_color="#d4dbe8",
                               showlegend=False,
-                              xaxis=dict(showgrid=False, tickfont_size=11),
-                              yaxis=dict(showgrid=True, gridcolor="#2a2a2a"),
-                              margin=dict(t=10, b=10, l=10, r=10))
+                              xaxis=dict(showgrid=False, tickfont_size=9),
+                              yaxis=dict(showgrid=True, gridcolor="#111", showticklabels=False),
+                              margin=dict(t=10, b=5, l=5, r=5))
             st.plotly_chart(fig, use_container_width=True)
 
+        with col3:
+            st.markdown("### Pipeline Funnel")
+            stage_order = ["prospecting","discovery","solutioning","validation","negotiation","closed_won"]
+            stage_labels = ["Prospecting","Discovery","Solutioning","Validation","Negotiation","Closed Won"]
+            stage_colors = ["#22c55e","#06b6d4","#6366f1","#d4a660","#f87171","#22c55e"]
+            stage_counts = [len(df[df["stage"] == s]) for s in stage_order]
+            fig = go.Figure(go.Bar(
+                y=stage_labels[::-1], x=stage_counts[::-1],
+                orientation='h',
+                marker_color=stage_colors[::-1],
+                text=[f"{c:,}" for c in stage_counts[::-1]],
+                textposition="outside",
+                textfont=dict(color="#e5e5e5", size=10),
+            ))
+            fig.update_layout(height=220, paper_bgcolor="rgba(0,0,0,0)",
+                              plot_bgcolor="rgba(0,0,0,0)", font_color="#d4dbe8",
+                              showlegend=False,
+                              xaxis=dict(showgrid=False, showticklabels=False),
+                              yaxis=dict(showgrid=False, tickfont=dict(size=9, color="#6b8ab0")),
+                              margin=dict(t=5, b=5, l=5, r=40))
+            st.plotly_chart(fig, use_container_width=True)
+
+        # ── Critical Alerts ──────────────────────────────────────
+        hot = active[(active["meddpicc"] >= 50) & (active["days_inactive"] >= 3)].sort_values(
+            ["meddpicc", "days_inactive"], ascending=[False, False]).head(3)
+        if not hot.empty:
+            st.markdown("---")
+            st.markdown("### 🔥 Sofort-Prioritäten")
+            for _, r in hot.iterrows():
+                _, qc = qualify(int(r["meddpicc"]))
+                li = f"&nbsp;·&nbsp;<a href='{r['linkedin']}' target='_blank' style='color:#6366f1;'>LinkedIn ↗</a>" if r.get("linkedin") else ""
+                st.markdown(f"""
+                <div class="alert-card">
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <div>
+                            <div class="alert-title">{r['company']} <span class="score-badge {qc}">{int(r['meddpicc'])}/80</span></div>
+                            <div class="alert-sub">👤 {r.get('contact_person') or 'N/A'} · {r['region']} · {r['stage']} · {int(r['days_inactive'])}d inaktiv{li}</div>
+                        </div>
+                        <div style="font-size:0.7rem;color:#ef4444;white-space:nowrap;margin-left:0.5rem;">
+                            🔥 Jetzt handeln
+                        </div>
+                    </div>
+                </div>""", unsafe_allow_html=True)
+
+        # ── Neueste Leads ────────────────────────────────────────
         st.markdown("---")
-        st.markdown("### Zuletzt hinzugefügt")
-        for _, r in df.head(8).iterrows():
+        st.markdown("### Neueste Leads")
+        recent = df.sort_values("created_at", ascending=False).head(8) if "created_at" in df.columns else df.head(8)
+        for _, r in recent.iterrows():
             _, qc = qualify(int(r["meddpicc"]))
-            li = f"<a href='{r['linkedin']}' target='_blank' style='color:#3b82f6;font-size:0.75rem;'>LinkedIn →</a>" if r.get("linkedin") else ""
+            li = f"<a href='{r['linkedin']}' target='_blank' style='color:#6366f1;font-size:0.7rem;'>↗ LinkedIn</a>" if r.get("linkedin") else ""
+            em = f"<a href='mailto:{r['email']}' style='color:#22c55e;font-size:0.7rem;'>✉</a>" if r.get("email") else ""
+            days = int(r.get("days_inactive") or 0)
+            urgency_color = "#22c55e" if days <= 3 else "#d4a660" if days <= 7 else "#ef4444"
             st.markdown(f"""
             <div class="lead-row">
-                <div style="display:flex;justify-content:space-between;align-items:center;">
-                    <div>
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
+                    <div style="flex:1;min-width:0;">
                         <div class="lead-company">{r['company']}</div>
-                        <div class="lead-meta">{r['region']} • {r['industry']} • {r['stage']} {li}</div>
+                        <div class="lead-meta">
+                            {r['region']} · {r.get('industry','')} · {r['stage']}
+                            &nbsp;{li}&nbsp;{em}
+                        </div>
                     </div>
-                    <span class="score-badge {qc}">{int(r['meddpicc'])}/80</span>
+                    <div style="text-align:right;flex-shrink:0;">
+                        <span class="score-badge {qc}">{int(r['meddpicc'])}/80</span>
+                        <div style="font-size:0.6rem;color:{urgency_color};margin-top:3px;">{days}d</div>
+                    </div>
                 </div>
             </div>""", unsafe_allow_html=True)
 
