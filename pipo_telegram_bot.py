@@ -215,8 +215,10 @@ def linkedin_get_profile_from_url(li_url):
             return None
         public_id = match.group(1).rstrip("/")
 
-        profile = api.get_profile(public_id=public_id) or {}
+        raw = api.get_profile(public_id=public_id)
+        profile = raw if isinstance(raw, dict) else {}
         if not profile:
+            log(f"get_profile returned empty/None for {public_id}: {type(raw)}")
             return None
 
         exps = profile.get("experience", [])
@@ -567,7 +569,14 @@ def handle_add_lead(chat_id, args_text, auto_strategy=False):
         company = profile.get("current_company", "")
 
     if not company:
-        tg_send(chat_id, "❌ Firmenname fehlt. Usage: /add [linkedin_url] [Firmenname] [Region]")
+        # LinkedIn-Profil-Lookup fehlgeschlagen — Firmenname manuell angeben
+        li_hint = f" {li_url}" if li_url else ""
+        tg_send(chat_id,
+            f"⚠️ LinkedIn Profil nicht erreichbar — Firmenname fehlt.\n\n"
+            f"Bitte so angeben:\n"
+            f"<code>/add{li_hint} FirmaXY</code>\n\n"
+            f"Beispiel:\n<code>/add{li_hint} Tangany DE Tier2</code>"
+        )
         return
 
     # In Supabase anlegen
