@@ -85,8 +85,13 @@ def sb_post(path, data):
         "Content-Type": "application/json",
         "Prefer": "return=representation",
     })
-    with urllib.request.urlopen(req, timeout=15) as r:
-        return json.loads(r.read())
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")
+        log(f"sb_post {path} HTTP {e.code}: {err_body[:300]}")
+        raise
 
 def sb_patch(path, params, data):
     url = f"{SUPABASE_URL}/rest/v1/{path}?{params}"
@@ -647,7 +652,37 @@ def handle_add_lead(chat_id, args_text="", auto_strategy=False, parsed=None):
         )
         return
 
+    # Prüfen ob Lead schon existiert (bevor wir versuchen zu inserieren)
+    existing = None
+    if li_url:
+        existing = db_find_by_linkedin(li_url)
+    if not existing and company:
+        hits = db_find_by_company(company)
+        if hits:
+            existing = hits[0]
+
+    if existing:
+        m = db_get_meddpicc(existing["id"])
+        score = m.get("total_score", 0) or 0
+        days = days_since(existing.get("updated_at"))
+        tg_send(chat_id,
+            f"ℹ️ <b>{existing['company']}</b> ist bereits in StakeStream.\n\n"
+            f"👤 {existing.get('contact_person','—')} · Stage: {existing.get('stage','?')} · "
+            f"MEDDPICC {score}/80 · {days}d inaktiv\n\n"
+            f"<code>strategie</code> — Battle Card generieren\n"
+            f"<a href='{DASHBOARD_URL}'>📊 Dashboard</a>"
+        )
+        set_context(chat_id, li_url=li_url, name=existing.get("contact_person",""),
+                    company=existing["company"], db_lead=existing)
+        if auto_strategy:
+            handle_battle_card(chat_id, existing["company"])
+        return
+
     # In Supabase anlegen
+    # Region validieren (Supabase-Enum: nur bekannte Werte)
+    valid_regions = {"DE", "CH", "UAE", "UK", "NORDICS", "EUROPE", "MIDEAST", "USA"}
+    if region not in valid_regions:
+        region = "DE"  # Fallback
     data = {
         "company":        company,
         "contact_person": contact_name or "",
@@ -658,9 +693,14 @@ def handle_add_lead(chat_id, args_text="", auto_strategy=False, parsed=None):
         "stage":          "prospecting",
         "source":         "Pipo Bot",
     }
-    result = db_create_lead(data)
+    try:
+        result = db_create_lead(data)
+    except Exception as e:
+        err_str = str(e)
+        log(f"handle_add_lead insert failed: {err_str}")
+        tg_send(chat_id, f"❌ Supabase-Fehler beim Anlegen von <b>{company}</b>:\n<code>{err_str[:200]}</code>")
+        return
     if result:
-        new_id = result[0].get("id") if isinstance(result, list) else result.get("id")
         msg = f"""✅ <b>{company}</b> hinzugefügt!
 
 👤 {contact_name or '—'} · {contact_title or '—'}
@@ -670,13 +710,11 @@ def handle_add_lead(chat_id, args_text="", auto_strategy=False, parsed=None):
 
 <a href='{DASHBOARD_URL}'>📊 Dashboard</a>"""
         tg_send(chat_id, msg)
-        # Kontext updaten
         set_context(chat_id, li_url=li_url, name=contact_name, company=company)
-        # Auto-Strategie falls angefordert
         if auto_strategy:
             handle_battle_card(chat_id, company)
     else:
-        tg_send(chat_id, f"⚠️ <b>{company}</b> möglicherweise bereits in DB.\n\n/status {company}")
+        tg_send(chat_id, f"❌ Unbekannter Fehler beim Anlegen von <b>{company}</b>.")
 
 
 def handle_find_contacts(chat_id, role, company):
