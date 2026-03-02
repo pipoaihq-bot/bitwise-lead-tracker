@@ -35,6 +35,7 @@ BATTLECARD_DIR = Path.home() / ".openclaw/workspace/leads/battlecards"
 LINKEDIN_EMAIL    = os.environ.get("LINKEDIN_EMAIL", "")
 LINKEDIN_PASSWORD = os.environ.get("LINKEDIN_PASSWORD", "")
 LINKEDIN_LI_AT    = os.environ.get("LINKEDIN_LI_AT", "")
+LINKEDIN_LI_A     = os.environ.get("LINKEDIN_LI_A",  "")  # Enterprise: Sales Navigator session
 _LI_API_CLIENT    = None
 
 # ── Colors ──────────────────────────────────────────────────────────────────
@@ -115,19 +116,17 @@ def _linkedin_api():
         if LINKEDIN_EMAIL and LINKEDIN_PASSWORD:
             _LI_API_CLIENT = Linkedin(LINKEDIN_EMAIL, LINKEDIN_PASSWORD)
         elif LINKEDIN_LI_AT:
-            # Cookie-only Auth: li_at setzen, dann JSESSIONID holen für CSRF-Token
+            # Cookie-only Auth (unterstützt Standard + Enterprise mit li_a)
             _LI_API_CLIENT = Linkedin("", "", authenticate=False)
             sess = _LI_API_CLIENT.client.session
             ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             sess.headers.update({"User-Agent": ua})
             sess.cookies.set("li_at", LINKEDIN_LI_AT, domain=".linkedin.com")
-            # allow_redirects=False verhindert 30-Redirect-Loop wenn li_at abgelaufen
+            if LINKEDIN_LI_A:  # Enterprise: zusätzlich li_a setzen
+                sess.cookies.set("li_a", LINKEDIN_LI_A, domain=".linkedin.com")
+            # JSESSIONID für CSRF holen
             try:
-                resp = sess.get(
-                    "https://www.linkedin.com/feed/",
-                    allow_redirects=False,
-                    timeout=10,
-                )
+                resp = sess.get("https://www.linkedin.com/feed/", allow_redirects=False, timeout=10)
                 jsid = sess.cookies.get("JSESSIONID", "") or resp.cookies.get("JSESSIONID", "")
             except Exception:
                 jsid = sess.cookies.get("JSESSIONID", "")
