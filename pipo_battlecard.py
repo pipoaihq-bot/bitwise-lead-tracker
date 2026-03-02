@@ -118,16 +118,23 @@ def _linkedin_api():
             # Cookie-only Auth: li_at setzen, dann JSESSIONID holen für CSRF-Token
             _LI_API_CLIENT = Linkedin("", "", authenticate=False)
             sess = _LI_API_CLIENT.client.session
+            ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            sess.headers.update({"User-Agent": ua})
             sess.cookies.set("li_at", LINKEDIN_LI_AT, domain=".linkedin.com")
-            # Init-Request um JSESSIONID zu bekommen
-            sess.get(
-                "https://www.linkedin.com/",
-                headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
-            )
-            # CSRF-Token aus JSESSIONID ableiten
-            jsid = sess.cookies.get("JSESSIONID", "")
+            # allow_redirects=False verhindert 30-Redirect-Loop wenn li_at abgelaufen
+            try:
+                resp = sess.get(
+                    "https://www.linkedin.com/feed/",
+                    allow_redirects=False,
+                    timeout=10,
+                )
+                jsid = sess.cookies.get("JSESSIONID", "") or resp.cookies.get("JSESSIONID", "")
+            except Exception:
+                jsid = sess.cookies.get("JSESSIONID", "")
             if jsid:
-                sess.headers.update({"csrf-token": jsid})
+                clean_jsid = jsid.strip('"')
+                sess.cookies.set("JSESSIONID", clean_jsid, domain=".linkedin.com")
+                sess.headers.update({"csrf-token": clean_jsid})
         return _LI_API_CLIENT
     except ImportError:
         print(f"{Y}  [LinkedIn] linkedin-api nicht installiert → pip install linkedin-api{X}")
