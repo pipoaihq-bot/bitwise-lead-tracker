@@ -236,7 +236,7 @@ def load_data():
             "total": len(df),
             "qualified": int((active["meddpicc"] >= 50).sum()),
             "stale": int((active["days_inactive"] >= 7).sum()),
-            "critical": int(((active["meddpicc"] >= 60) & (active["days_inactive"] >= 3)).sum()),
+            "critical": int(((active["meddpicc"] >= 60) & (active["days_inactive"] >= 14)).sum()),
             "pipeline": float(active["deal_size"].sum()),
         }
         return df, stats
@@ -372,14 +372,18 @@ with st.sidebar:
         </div>
     </div>
     """, unsafe_allow_html=True)
+    dringend_tage = st.slider("⚠ DRINGEND ab Tagen inaktiv", min_value=3, max_value=60, value=14, step=1)
     if not df.empty:
         c1, c2 = st.columns(2)
         with c1:
             st.markdown(f"<div style='font-family:Cormorant Garamond,serif;font-size:1.75rem;font-weight:300;color:#fff;'>{stats['total']:,}</div><div style='font-size:0.6rem;color:#4a6080;text-transform:uppercase;letter-spacing:0.1em;'>Leads</div>", unsafe_allow_html=True)
         with c2:
             st.markdown(f"<div style='font-family:Cormorant Garamond,serif;font-size:1.75rem;font-weight:300;color:#fff;'>€{stats['pipeline']:.0f}M</div><div style='font-size:0.6rem;color:#4a6080;text-transform:uppercase;letter-spacing:0.1em;'>Pipeline</div>", unsafe_allow_html=True)
-        if stats['critical'] > 0:
-            st.markdown(f"<div style='background:#1f0909;color:#f87171;padding:0.4rem 0.75rem;border-radius:3px;border:1px solid #7f1d1d;font-size:0.75rem;margin-top:0.75rem;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;'>⚠ {stats['critical']} DRINGEND</div>", unsafe_allow_html=True)
+        # Recalculate critical with slider threshold
+        active_sidebar = df[~df["stage"].isin(["closed_won", "closed_lost"])]
+        critical_count = int(((active_sidebar["meddpicc"] >= 60) & (active_sidebar["days_inactive"] >= dringend_tage)).sum()) if not active_sidebar.empty else 0
+        if critical_count > 0:
+            st.markdown(f"<div style='background:#1f0909;color:#f87171;padding:0.4rem 0.75rem;border-radius:3px;border:1px solid #7f1d1d;font-size:0.75rem;margin-top:0.75rem;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;'>⚠ {critical_count} DRINGEND (>{dringend_tage}d)</div>", unsafe_allow_html=True)
     st.markdown("<hr style='border-color:rgba(255,255,255,0.05);margin:1rem 0;'>", unsafe_allow_html=True)
     if st.button("↻  Aktualisieren"):
         st.cache_data.clear()

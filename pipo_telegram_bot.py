@@ -25,6 +25,7 @@ Als macOS Service (automatisch beim Login):
 """
 
 import os, sys, json, time, re, urllib.request, urllib.parse, argparse, subprocess
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -39,6 +40,7 @@ ANTHROPIC_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
 EXA_KEY        = os.environ.get("EXA_API_KEY", "")
 LEADTRACKER    = Path(__file__).parent
 DASHBOARD_URL  = "https://pipo-bitwise-lead-tracker.streamlit.app"
+OPS_SCRIPT     = str(LEADTRACKER / "stakestream_ops.py")
 
 POLL_INTERVAL  = 2   # Sekunden zwischen getUpdates-Aufrufen
 LOG_FILE       = Path("/tmp/pipo_bot.log")
@@ -396,6 +398,13 @@ Aktionen und Parameter:
 - status           → {company_or_url?}
 - find_contacts    → {role, company}
 - top_leads        → {n?}
+- email_draft      → {company}
+- update_lead      → {company, field, value}
+- log_activity     → {company, type, note, next_steps?}
+- update_stage     → {company, stage}
+- create_task      → {title, priority?, company?, contact?}
+- complete_task    → {id}
+- pipeline         → {}
 - help             → {}
 - unknown          → {}
 
@@ -406,6 +415,18 @@ Regeln:
 - "status/wie läuft/wie steht/was ist bei" → status
 - "wer ist/finde/entscheider/suche" + Firma → find_contacts
 - "top leads/top N/zeig leads" → top_leads
+- "email/mail/schreib/draft" + Firma → email_draft
+- "update/ändere/setze/stage/tier" + Firma + Wert → update_lead (field: stage|tier|region|use_case|notes)
+- "notiere/gesprächsnotiz/notiz/call/meeting/email geschickt/follow-up/hab gesprochen/habe... geschrieben/geschickt" → log_activity
+  type: call|email|meeting|demo|proposal|linkedin|other
+  note: der Inhalt des Gesprächs/der Aktivität
+  next_steps: wenn "nächster Schritt/next steps/nächste Schritte" erwähnt
+- "ist jetzt in/stage auf/bewegt auf/verschoben zu" + Stage → update_stage
+  stages: prospecting|discovery|solutioning|validation|negotiation|closed_won|closed_lost
+- "erstelle aufgabe/task/todo/erinnere mich" → create_task
+  priority: P1 (dringend/sofort) | P2 (normal) | P3 (nice-to-have), default P2
+- "task erledigt/task N fertig/abgehakt" + ID → complete_task
+- "pipeline/wie steht die pipeline/übersicht" → pipeline
 - bare LinkedIn-URL → linkedin_lookup
 - Firma ohne Befehl → status
 - Parameter weglassen wenn unbekannt (nicht raten)
@@ -421,7 +442,7 @@ def claude_route_intent(text: str, ctx: dict) -> dict | None:
         ctx_str = f"Letzter Lead: {ctx.get('name','')} @ {ctx.get('company','')} URL={ctx.get('li_url','')}"
     payload = json.dumps({
         "model": "claude-haiku-4-5-20251001",
-        "max_tokens": 120,
+        "max_tokens": 220,
         "system": _INTENT_SYSTEM,
         "messages": [{"role": "user", "content": f"Kontext: {ctx_str}\nNachricht: {text}"}]
     }).encode()
@@ -442,6 +463,173 @@ def claude_route_intent(text: str, ctx: dict) -> dict | None:
         log(f"claude_route error: {e}")
         return None
 
+
+# ── Lead Action Buttons (Inline Keyboard) ────────────────────────────────────
+
+STAGE_MAP = {
+    "prospecting": "prospecting", "discovery": "discovery",
+    "solutioning": "solutioning", "proposal": "proposal",
+    "negotiation": "negotiation", "closed_won": "closed_won",
+    "closed_lost": "closed_lost", "won": "closed_won", "lost": "closed_lost",
+}
+FIELD_MAP = {
+    "stage": "stage", "tier": "tier", "region": "region",
+    "use_case": "use_case", "notiz": "notes", "note": "notes", "notes": "notes",
+}
+STAGE_ABBREV = {
+    "pro": "prospecting", "dis": "discovery", "mtg": "meeting",
+    "sol": "solutioning", "prp": "proposal",  "neg": "negotiation",
+    "won": "closed_won",  "lst": "closed_lost",
+}
+
+def make_lead_buttons(lead_id):
+    """Inline keyboard mit den wichtigsten Actions für einen Lead."""
+    lid = str(lead_id)
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Email gesendet",  "callback_data": f"e:{lid}"},
+                {"text": "✏️ Neue Email",      "callback_data": f"r:{lid}"},
+            ],
+            [
+                {"text": "🔵 Discovery",  "callback_data": f"s:{lid}:dis"},
+                {"text": "📅 Meeting",    "callback_data": f"s:{lid}:mtg"},
+                {"text": "🟡 Proposal",   "callback_data": f"s:{lid}:prp"},
+            ],
+            [
+                {"text": "🟢 Won",        "callback_data": f"s:{lid}:won"},
+                {"text": "❌ Lost",        "callback_data": f"s:{lid}:lst"},
+                {"text": "🚫 Skip",        "callback_data": f"sk:{lid}"},
+            ],
+            [
+                {"text": "💡 Battle Card", "callback_data": f"c:{lid}"},
+            ],
+        ]
+    }
+
+def tg_answer_callback(callback_id, text="✅", alert=False):
+    """Bestätigt Button-Druck (entfernt Ladeindikator in Telegram)."""
+    payload = json.dumps({
+        "callback_query_id": callback_id,
+        "text": text,
+        "show_alert": alert,
+    }).encode()
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery",
+        data=payload, method="POST",
+        headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read())
+    except Exception as e:
+        log(f"answerCallback error: {e}")
+
+# ── Research + Email Generation (shared with morning brief) ──────────────────
+
+def research_company_news(company, region="DE"):
+    """Aktuelle News via Google News RSS."""
+    try:
+        lang = "de" if region in ("DE", "AT", "CH") else "en"
+        gl   = "DE" if region == "DE" else "CH" if region == "CH" else "AE" if region == "UAE" else "GB"
+        query = urllib.parse.quote(f'"{company}" crypto ETH staking digital assets')
+        url = f"https://news.google.com/rss/search?q={query}&hl={lang}&gl={gl}&ceid={gl}:{lang}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            root = ET.fromstring(r.read())
+        items = root.findall(".//item")[:3]
+        news = []
+        for item in items:
+            title = item.findtext("title") or ""
+            title = title.split(" - ")[0].strip()
+            if title:
+                news.append(f"• {title[:90]}")
+        return news if news else []
+    except:
+        return []
+
+def generate_email_draft(lead, news_items):
+    """Generiert Email-Draft via Claude Haiku — gleiche Logik wie Morning Brief."""
+    news_text = "\n".join(news_items) if news_items else "Keine aktuellen News gefunden."
+    region = lead.get("region", "DE")
+    lang   = "Deutsch" if region in ("DE", "AT", "CH") else "Englisch"
+    use_du = region in ("DE", "AT", "CH") or (lead.get("industry") or "").lower() in (
+        "crypto/blockchain", "crypto", "blockchain", "defi", "fintech"
+    )
+    anrede = lead.get("contact_person", "").split()[0] if lead.get("contact_person") else "zusammen"
+
+    prompt = f"""Du bist Pipo, Pre-Sales Analyst für Philipp Sandor (HEAD EMEA, Bitwise Asset Management, Dubai).
+
+DEINE AUFGABE: Analysiere diesen Lead und schreibe eine Email GENAU in Philipps Stimme.
+
+═══ LEAD ═══
+Unternehmen: {lead['company']}
+Kontakt: {lead.get('contact_person') or 'unbekannt'} ({lead.get('title') or 'Titel unbekannt'})
+Region: {region} | Industry: {lead.get('industry') or 'Institutional'}
+AUM: ~€{lead.get('aum_estimate_millions') or 0:.0f}M | Deal: €{lead.get('expected_deal_size_millions') or 0:.0f}M
+Stage: {lead.get('stage')} | Inaktiv seit: {lead.get('days_inactive', 0)} Tagen
+MEDDPICC: {lead.get('meddpicc', 0)}/80
+
+═══ AKTUELLE NEWS/KONTEXT ═══
+{news_text}
+
+═══ BITWISE BOS (NUR 1 FAKT PRO EMAIL VERWENDEN) ═══
+- ~$5B ETH gestaked, non-custodial
+- Zero Slashings seit Genesis September 2022
+- 99.984% Uptime 2025
+- APR 3.170% vs Benchmark 3.015% (+0.155% Outperformance)
+- MiCA-konform, KPMG-geprüft
+
+═══ PHILIPPS ECHTER SCHREIBSTIL (STRIKT EINHALTEN) ═══
+STIMME: Warm, direkt, menschlich. Nie corporate.
+STRUKTUR (max. 4 Sätze im Body):
+1. Persönliche Eröffnung — warmth first
+2. Konkreter Bezug zu IHNEN (aus News) — 1 Satz
+3. EIN spezifischer Bitwise-Fakt — 1 Satz
+4. CTA: "Wäre ein 15-minütiger Austausch nächste Woche möglich?" ODER "https://calendly.com/psandor/30min"
+ANREDE: {'Verwende "du": "Hallo ' + anrede + ',"' if use_du else 'Verwende "Sie": "Hallo ' + anrede + ',"'}
+SIGNATUR: {'Viele Grüße aus Dubai,\\nPhilipp' if lang == 'Deutsch' else 'Best,\\nPhilipp'}
+
+VERBOTEN: ❌ Mehrere Facts ❌ "revolutionär" ❌ "Ich hoffe..." ❌ Mehr als 1 CTA
+
+Antworte NUR in diesem JSON:
+{{"why_now":"1 Satz warum JETZT","angle":"stärkster Sales-Angle","risk":"größtes Risiko","subject":"Betreff max 8 Wörter","email":"vollständiger Email-Body"}}"""
+
+    payload = json.dumps({
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 1000,
+        "messages": [{"role": "user", "content": prompt}]
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=payload, method="POST",
+        headers={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01",
+                 "content-type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=45) as r:
+        resp = json.loads(r.read())
+    text = resp["content"][0]["text"].strip()
+    text = text.replace("```json", "").replace("```", "").strip()
+    start = text.find("{"); end = text.rfind("}") + 1
+    return json.loads(text[start:end])
+
+def _load_lead_with_scores(lead_id):
+    """Lädt einen Lead aus Supabase inkl. MEDDPICC Scores."""
+    rows = sb_get("leads",
+        f"id=eq.{lead_id}&select=*,meddpicc_scores(total_score,qualification_status,pain,champion,economic_buyer)")
+    if not rows:
+        return None
+    lead = rows[0]
+    sc = lead.pop("meddpicc_scores", None)
+    if isinstance(sc, list):
+        sc = sc[0] if sc else None
+    lead["meddpicc"]   = (sc.get("total_score") or 0) if sc else 0
+    lead["ql"]         = (sc.get("qualification_status") or "UNQUALIFIED") if sc else "UNQUALIFIED"
+    lead["m_pain"]     = (sc.get("pain") or 0) if sc else 0
+    lead["m_champion"] = (sc.get("champion") or 0) if sc else 0
+    lead["m_economic"] = (sc.get("economic_buyer") or 0) if sc else 0
+    lead["days_inactive"] = days_since(lead.get("updated_at"))
+    return lead
 
 # ── Command Handlers ──────────────────────────────────────────────────────────
 
@@ -777,32 +965,330 @@ def handle_battle_card(chat_id, company_query):
         tg_send(chat_id, f"❌ Fehler: {e}")
 
 
+def handle_email(chat_id, company_query):
+    """Generiert Email-Draft on-demand für eine Firma."""
+    tg_send(chat_id, f"✉️ Generiere Email für <b>{company_query}</b>…")
+    leads = db_find_by_company(company_query)
+    if not leads:
+        tg_send(chat_id, f"❌ Kein Lead für '<b>{company_query}</b>' in StakeStream.\nMit <code>/add</code> anlegen.")
+        return
+    lead = leads[0]
+    lead_id = lead.get("id")
+    # Scores nachladen
+    scores = db_get_meddpicc(lead_id) if lead_id else None
+    lead["meddpicc"]      = (scores.get("total_score") or 0) if scores else 0
+    lead["ql"]            = (scores.get("qualification_status") or "UNQUALIFIED") if scores else "UNQUALIFIED"
+    lead["m_pain"]        = (scores.get("pain") or 0) if scores else 0
+    lead["m_champion"]    = (scores.get("champion") or 0) if scores else 0
+    lead["m_economic"]    = (scores.get("economic_buyer") or 0) if scores else 0
+    lead["days_inactive"] = days_since(lead.get("updated_at"))
+
+    news = research_company_news(lead.get("company", ""), lead.get("region", "DE"))
+    try:
+        brief = generate_email_draft(lead, news)
+    except Exception as e:
+        tg_send(chat_id, f"❌ Fehler beim Generieren: {e}")
+        return
+
+    company = lead.get("company", company_query)
+    contact = lead.get("contact_person") or "—"
+    title   = lead.get("title") or ""
+    msg = (
+        f"✉️ <b>Email Draft — {company}</b>\n"
+        f"👤 {contact} · <i>{title}</i>\n\n"
+        f"<b>🎯 Angle:</b> {brief.get('angle', '—')}\n"
+        f"<b>⚠️ Risiko:</b> <i>{brief.get('risk', '—')}</i>\n\n"
+        f"<b>Betreff:</b> <code>{brief.get('subject', '')}</code>\n\n"
+        f"<code>{brief.get('email', '')}</code>"
+    )
+    set_context(chat_id, company=company)
+    tg_send(chat_id, msg, reply_markup=make_lead_buttons(lead_id) if lead_id else None)
+
+
+def handle_update_lead(chat_id, args_text):
+    """Updatet ein Lead-Feld direkt aus Telegram.
+    Format: /update Firma | field | value
+         oder: /update Firma stage discovery
+    """
+    # Pipe-separiert?
+    parts = [p.strip() for p in re.split(r"\|", args_text)]
+    if len(parts) == 3:
+        company, field, value = parts
+    else:
+        # Space-basiert: letzte 2 Tokens = field + value, Rest = Firma
+        tokens = args_text.strip().split()
+        if len(tokens) < 3:
+            tg_send(chat_id,
+                "❓ Format:\n"
+                "<code>/update Firma stage discovery</code>\n"
+                "<code>/update Firma | stage | proposal</code>\n\n"
+                "Felder: stage · tier · region · use_case · notes\n"
+                "Stages: prospecting · discovery · solutioning · proposal · negotiation · closed_won · closed_lost"
+            )
+            return
+        field = tokens[-2]
+        value = tokens[-1]
+        company = " ".join(tokens[:-2])
+
+    db_field = FIELD_MAP.get(field.lower(), field.lower())
+    if db_field == "stage":
+        value_norm = STAGE_MAP.get(value.lower(), value.lower())
+    elif db_field == "tier":
+        try:
+            value_norm = int(value)
+        except ValueError:
+            value_norm = value
+    else:
+        value_norm = value
+
+    leads = db_find_by_company(company)
+    if not leads:
+        tg_send(chat_id, f"❌ Kein Lead für '<b>{company}</b>' gefunden.")
+        return
+    lead   = leads[0]
+    lead_id = lead.get("id")
+    try:
+        sb_patch("leads", f"id=eq.{lead_id}", {db_field: value_norm})
+        tg_send(chat_id,
+            f"✅ <b>{lead['company']}</b>\n"
+            f"<code>{db_field}</code> → <code>{value_norm}</code>",
+            reply_markup=make_lead_buttons(lead_id)
+        )
+        set_context(chat_id, company=lead["company"])
+    except Exception as e:
+        tg_send(chat_id, f"❌ Update fehlgeschlagen: {e}")
+
+
+def handle_callback_query(callback_query):
+    """Verarbeitet Button-Presses aus Inline-Keyboards."""
+    callback_id = callback_query["id"]
+    chat_id     = str(callback_query["from"]["id"])
+    data        = callback_query.get("data", "")
+
+    parts  = data.split(":", 2)
+    action = parts[0] if parts else ""
+    lead_id = parts[1] if len(parts) > 1 else ""
+    extra   = parts[2] if len(parts) > 2 else ""
+
+    log(f"callback: action={action} lead={lead_id} extra={extra}")
+
+    if action == "e":  # ✅ Email gesendet → stage → discovery, last_contact setzen
+        try:
+            sb_patch("leads", f"id=eq.{lead_id}", {
+                "stage": "discovery",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
+            rows    = sb_get("leads", f"id=eq.{lead_id}&select=company")
+            company = rows[0]["company"] if rows else "Lead"
+            tg_answer_callback(callback_id, "✅ Markiert!")
+            tg_send(chat_id,
+                f"✅ <b>{company}</b> — Email als gesendet markiert.\n"
+                f"Stage: <code>discovery</code> · last_contact: heute"
+            )
+        except Exception as e:
+            tg_answer_callback(callback_id, f"Fehler: {str(e)[:40]}", alert=True)
+
+    elif action == "r":  # ✏️ Neue Email generieren
+        tg_answer_callback(callback_id, "✏️ Generiere…")
+        lead = _load_lead_with_scores(lead_id)
+        if not lead:
+            tg_send(chat_id, "❌ Lead nicht gefunden.")
+            return
+        news = research_company_news(lead.get("company", ""), lead.get("region", "DE"))
+        try:
+            brief = generate_email_draft(lead, news)
+            msg = (
+                f"✏️ <b>Neue Email — {lead['company']}</b>\n\n"
+                f"<b>🎯 Angle:</b> {brief.get('angle', '—')}\n\n"
+                f"<b>Betreff:</b> <code>{brief.get('subject', '')}</code>\n\n"
+                f"<code>{brief.get('email', '')}</code>"
+            )
+            tg_send(chat_id, msg, reply_markup=make_lead_buttons(lead_id))
+        except Exception as e:
+            tg_send(chat_id, f"❌ Fehler: {e}")
+
+    elif action == "s":  # 📊 Stage ändern
+        stage_full = STAGE_ABBREV.get(extra, extra)
+        try:
+            sb_patch("leads", f"id=eq.{lead_id}", {"stage": stage_full})
+            rows    = sb_get("leads", f"id=eq.{lead_id}&select=company")
+            company = rows[0]["company"] if rows else "Lead"
+            tg_answer_callback(callback_id, f"Stage: {stage_full}")
+            tg_send(chat_id, f"✅ <b>{company}</b> → Stage: <code>{stage_full}</code>")
+        except Exception as e:
+            tg_answer_callback(callback_id, f"Fehler: {str(e)[:40]}", alert=True)
+
+    elif action == "c":  # 💡 Battle Card
+        tg_answer_callback(callback_id, "💡 Battle Card…")
+        rows = sb_get("leads", f"id=eq.{lead_id}&select=company")
+        if rows:
+            handle_battle_card(chat_id, rows[0]["company"])
+
+    elif action == "sk":  # 🚫 Skip
+        tg_answer_callback(callback_id, "⏭️ Übersprungen")
+        rows    = sb_get("leads", f"id=eq.{lead_id}&select=company")
+        company = rows[0]["company"] if rows else "Lead"
+        tg_send(chat_id, f"⏭️ <b>{company}</b> übersprungen — kein Update.")
+
+    else:
+        tg_answer_callback(callback_id, "❓ Unbekannte Aktion")
+
+
+def _run_ops(args: list) -> str:
+    """Ruft stakestream_ops.py auf und gibt Output zurück."""
+    try:
+        env = os.environ.copy()
+        result = subprocess.run(
+            [sys.executable, OPS_SCRIPT] + args,
+            capture_output=True, text=True, timeout=30, env=env
+        )
+        out = (result.stdout or "").strip()
+        err = (result.stderr or "").strip()
+        if result.returncode != 0 and err:
+            return f"❌ {err[:300]}"
+        return out or "✅ Erledigt."
+    except subprocess.TimeoutExpired:
+        return "⏱ Timeout — StakeStream nicht erreichbar."
+    except Exception as e:
+        return f"❌ Fehler: {e}"
+
+
+def handle_log_activity(chat_id, company, act_type, note, next_steps=""):
+    """Loggt eine Aktivität für einen Lead via stakestream_ops."""
+    VALID = ["email", "call", "meeting", "demo", "proposal", "linkedin", "other"]
+    t = act_type.lower()
+    if t not in VALID:
+        # Mapping von Alltagssprache
+        if any(w in t for w in ["tel", "ruf", "phone", "gespräch"]): t = "call"
+        elif any(w in t for w in ["mail", "brief", "geschickt", "geschrieben"]): t = "email"
+        elif any(w in t for w in ["meet", "treffen", "london", "person", "vor ort"]): t = "meeting"
+        elif any(w in t for w in ["demo", "präsen"]): t = "demo"
+        elif any(w in t for w in ["linked"]): t = "linkedin"
+        else: t = "other"
+
+    args = ["add-note", company, t, note]
+    if next_steps:
+        args += ["--next-steps", next_steps]
+
+    out = _run_ops(args)
+    # HTML-safe output
+    tg_send(chat_id, out.replace("*", "<b>").replace("_", ""), parse_mode="HTML")
+
+
+def handle_update_stage(chat_id, company, stage):
+    """Setzt die Deal-Stage eines Leads."""
+    STAGE_NORM = {
+        "pro": "prospecting", "prospecting": "prospecting",
+        "dis": "discovery",   "discovery": "discovery",
+        "sol": "solutioning", "solutioning": "solutioning",
+        "val": "validation",  "validation": "validation",
+        "neg": "negotiation", "negotiation": "negotiation",
+        "won": "closed_won",  "closed_won": "closed_won",  "gewonnen": "closed_won",
+        "lost": "closed_lost","closed_lost": "closed_lost","verloren": "closed_lost",
+    }
+    stage_norm = STAGE_NORM.get(stage.lower(), stage.lower())
+    out = _run_ops(["update-stage", company, stage_norm])
+    tg_send(chat_id, out.replace("*", "<b>"), parse_mode="HTML")
+
+
+def handle_create_task(chat_id, title, priority="P2", company=None, contact=None, due=None):
+    """Erstellt eine Aufgabe im StakeStream Dashboard."""
+    args = ["create-task", title, priority.upper()]
+    if company:  args += ["--company", company]
+    if contact:  args += ["--contact", contact]
+    if due:      args += ["--due", due]
+    out = _run_ops(args)
+    tg_send(chat_id, out.replace("*", "<b>"), parse_mode="HTML")
+
+
+def handle_complete_task(chat_id, task_id):
+    """Markiert eine Aufgabe als erledigt."""
+    try:
+        tid = int(str(task_id).strip())
+    except ValueError:
+        tg_send(chat_id, "❓ Task-ID muss eine Zahl sein. Beispiel: <code>Task 42 erledigt</code>")
+        return
+    out = _run_ops(["complete-task", str(tid)])
+    tg_send(chat_id, out.replace("*", "<b>"), parse_mode="HTML")
+
+
+def handle_pipeline(chat_id):
+    """Zeigt Pipeline-Übersicht."""
+    out = _run_ops(["pipeline"])
+    tg_send(chat_id, out.replace("*", "<b>"), parse_mode="HTML")
+
+
+def handle_tasks(chat_id, status_filter=None):
+    """Zeigt Aufgaben."""
+    args = ["tasks"]
+    if status_filter:
+        args += ["--status", status_filter]
+    out = _run_ops(args)
+    tg_send(chat_id, out.replace("*", "<b>"), parse_mode="HTML")
+
+
+def handle_export(chat_id):
+    """Führt Salesforce Export aus und sendet an @Taskforce."""
+    tg_send(chat_id, "📤 <b>Salesforce Export wird generiert...</b>", parse_mode="HTML")
+    export_script = str(LEADTRACKER / "salesforce_export.py")
+    env_file      = str(LEADTRACKER / ".env")
+    try:
+        import subprocess
+        env = os.environ.copy()
+        # Source .env manually
+        env_result = subprocess.run(
+            ["bash", "-c", f"set -a && source {env_file} && env"],
+            capture_output=True, text=True, timeout=10
+        )
+        for line in env_result.stdout.splitlines():
+            if "=" in line:
+                k, _, v = line.partition("=")
+                env[k] = v
+        result = subprocess.run(
+            [sys.executable, export_script],
+            capture_output=True, text=True, timeout=60, env=env
+        )
+        if result.returncode == 0:
+            tg_send(chat_id, "✅ <b>Export gesendet</b> → @Pipo_EMEA_Taskforce_bot", parse_mode="HTML")
+        else:
+            err = (result.stderr or result.stdout)[:300]
+            tg_send(chat_id, f"❌ <b>Export fehlgeschlagen:</b>\n<code>{err}</code>", parse_mode="HTML")
+    except Exception as e:
+        tg_send(chat_id, f"❌ <b>Fehler:</b> <code>{e}</code>", parse_mode="HTML")
+
+
 def handle_help(chat_id):
     msg = """🤖 <b>Pipo Bot — Befehle</b>
 
-<b>LinkedIn URL einfach senden:</b>
-<code>https://linkedin.com/in/beritfuss</code>
-→ DB-Check + Profil + AI-Einschätzung
+<b>📥 Lesen:</b>
+/top [n]              — Top N Leads (default: 5)
+/status [firma]       — Lead-Status + MEDDPICC + Aktivitäten
+/pipeline             — Pipeline-Übersicht nach Stage
+/tasks                — Offene Aufgaben
+/export               — Salesforce Export → @Taskforce
+/card [firma]         — Battle Card generieren
 
-<b>Explizite Befehle:</b>
-/top [n]                        — Top N Leads (default: 5)
-/status [firma]                 — Lead-Status + MEDDPICC
-/card [firma]                   — Battle Card generieren
+<b>✍️ Schreiben (Chief of Staff):</b>
+/note Firma | call | Gesprächsnotiz | Nächste Schritte
+/stage Firma negotiation        — Deal-Stage setzen
+/task Titel | P1 | Firma        — Aufgabe erstellen
+/update Firma stage discovery   — Feld aktualisieren
+"Task 42 erledigt"              — Aufgabe abhaken
+
+<b>➕ Lead Management:</b>
 /add [url] [firma] [Region]     — Lead anlegen
-/find [rolle] bei [firma]       — Entscheider auf LinkedIn suchen
+/find [rolle] bei [firma]       — Entscheider suchen
+/email [firma]                  — Email-Draft generieren
 
-<b>Sales Navigator (natürliche Sprache):</b>
-"wer ist CTO bei Euler Hermes?"   → LinkedIn Suche
-"finde Entscheider bei DDA"       → C-Level Suche
-"entscheider bei [firma]"         → Gleich
+<b>💬 Natürliche Sprache:</b>
+"Hab heute mit Jared von Re7 telefoniert, sehr positiv"
+"Re7 ist jetzt in Negotiation"
+"Erstelle Task: Follow-up an Sabih, P1"
+"Wie steht die Pipeline?"
 
-<b>Weitere Befehle:</b>
-"haben wir [name/firma]?"  → DB-Suche
-"zeig mir die top leads"   → /top
-"battle card für [firma]"  → /card
-"hinzufügen + strategie"   → Add + Battle Card
+<b>Stages:</b> prospecting · discovery · solutioning · validation · negotiation · closed_won · closed_lost
 
-<a href='https://pipo-bitwise-lead-tracker.streamlit.app'>📊 Dashboard</a>"""
+<a href='https://pipo-bitwise-lead-tracker.streamlit.app'>📊 Dashboard öffnen</a>"""
     tg_send(chat_id, msg)
 
 
@@ -828,8 +1314,48 @@ def process_message(chat_id, text):
         parts = text.split()
         handle_top_leads(chat_id, int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 5)
         return
+    if text_lower.startswith("/email "):
+        handle_email(chat_id, text[7:].strip())
+        return
+    if text_lower.startswith("/update "):
+        handle_update_lead(chat_id, text[8:].strip())
+        return
     if text_lower in ("/help", "help", "hilfe", "?", "/start"):
         handle_help(chat_id)
+        return
+    if text_lower in ("/pipeline", "pipeline", "übersicht", "wie steht die pipeline"):
+        handle_pipeline(chat_id)
+        return
+    if text_lower.startswith("/tasks") or text_lower in ("aufgaben", "tasks", "todos"):
+        parts = text.split()
+        sf = parts[1] if len(parts) > 1 and parts[1] in ("todo","in_progress","done") else None
+        handle_tasks(chat_id, sf)
+        return
+    if text_lower in ("/export", "export", "salesforce export", "sf export"):
+        handle_export(chat_id)
+        return
+    if text_lower.startswith("/note "):
+        # /note Firma | Typ | Notiz [| next_steps]
+        parts_n = [p.strip() for p in text[6:].split("|")]
+        if len(parts_n) >= 3:
+            handle_log_activity(chat_id, parts_n[0], parts_n[1], parts_n[2],
+                                parts_n[3] if len(parts_n) > 3 else "")
+        else:
+            tg_send(chat_id, "❓ Format: <code>/note Firma | call | Notiztext | Nächste Schritte</code>")
+        return
+    if text_lower.startswith("/stage "):
+        parts_s = text[7:].strip().rsplit(" ", 1)
+        if len(parts_s) == 2:
+            handle_update_stage(chat_id, parts_s[0].strip(), parts_s[1].strip())
+        else:
+            tg_send(chat_id, "❓ Format: <code>/stage Firmenname negotiation</code>")
+        return
+    if text_lower.startswith("/task "):
+        # /task Titel | Priorität | Firma
+        parts_t = [p.strip() for p in text[6:].split("|")]
+        handle_create_task(chat_id, parts_t[0],
+                           parts_t[1] if len(parts_t) > 1 else "P2",
+                           parts_t[2] if len(parts_t) > 2 else None)
         return
     if text_lower.startswith("/find "):
         find_rest = text[6:].strip()
@@ -888,6 +1414,73 @@ def process_message(chat_id, text):
 
         elif action == "top_leads":
             handle_top_leads(chat_id, params.get("n", 5))
+            return
+
+        elif action == "email_draft":
+            company = params.get("company", "")
+            if not company and ctx:
+                company = ctx.get("company", "")
+            if company:
+                handle_email(chat_id, company)
+            else:
+                tg_send(chat_id, "❓ Für welche Firma? Beispiel: <code>/email Tangany</code>")
+            return
+
+        elif action == "update_lead":
+            company = params.get("company", "")
+            field   = params.get("field", "")
+            value   = params.get("value", "")
+            if company and field and value:
+                handle_update_lead(chat_id, f"{company} | {field} | {value}")
+            else:
+                tg_send(chat_id, "❓ Format: <code>/update Firma stage discovery</code>")
+            return
+
+        elif action == "log_activity":
+            company    = params.get("company", "")
+            act_type   = params.get("type", "other")
+            note       = params.get("note", "")
+            next_steps = params.get("next_steps", "")
+            if not company and ctx:
+                company = ctx.get("company", "")
+            if company and note:
+                handle_log_activity(chat_id, company, act_type, note, next_steps)
+            else:
+                tg_send(chat_id, "❓ Konnte Firma oder Notiz nicht erkennen.\nFormat: <code>/note Firma | call | Notiz</code>")
+            return
+
+        elif action == "update_stage":
+            company = params.get("company", "")
+            stage   = params.get("stage", "")
+            if not company and ctx:
+                company = ctx.get("company", "")
+            if company and stage:
+                handle_update_stage(chat_id, company, stage)
+            else:
+                tg_send(chat_id, "❓ Format: <code>/stage Firmenname negotiation</code>")
+            return
+
+        elif action == "create_task":
+            title    = params.get("title", "")
+            priority = params.get("priority", "P2")
+            company  = params.get("company", "")
+            contact  = params.get("contact", "")
+            if title:
+                handle_create_task(chat_id, title, priority, company or None, contact or None)
+            else:
+                tg_send(chat_id, "❓ Format: <code>/task Aufgabentitel | P1 | Firmenname</code>")
+            return
+
+        elif action == "complete_task":
+            tid = params.get("id")
+            if tid is not None:
+                handle_complete_task(chat_id, tid)
+            else:
+                tg_send(chat_id, "❓ Welche Task-ID? Beispiel: <code>Task 42 erledigt</code>")
+            return
+
+        elif action == "pipeline":
+            handle_pipeline(chat_id)
             return
 
         elif action == "help":
@@ -958,6 +1551,72 @@ def process_message(chat_id, text):
     tg_send(chat_id, f"🤔 Nicht verstanden.{ctx_hint}\n\n/help — alle Befehle")
 
 
+# ── Proactive Checks ─────────────────────────────────────────────────────────
+_last_proactive_check = 0
+PROACTIVE_INTERVAL = 6 * 3600  # Check every 6 hours
+
+def run_proactive_checks():
+    """Proaktive Alerts: stale leads in discovery 7+ Tage, breaking news."""
+    global _last_proactive_check
+    now = time.time()
+    if now - _last_proactive_check < PROACTIVE_INTERVAL:
+        return
+    _last_proactive_check = now
+
+    if not TELEGRAM_CHAT:
+        return
+
+    log("Running proactive checks...")
+
+    try:
+        # Find leads stuck in active stages for 7+ days
+        params = ("select=id,company,contact_person,stage,updated_at,"
+                  "meddpicc_scores(total_score)"
+                  "&stage=in.(discovery,meeting,solutioning,proposal)")
+        leads = sb_get("leads", params)
+
+        alerts = []
+        for l in leads:
+            sc = l.pop("meddpicc_scores", None)
+            if isinstance(sc, list):
+                sc = sc[0] if sc else None
+            meddpicc = (sc.get("total_score") or 0) if sc else 0
+
+            upd = l.get("updated_at") or ""
+            try:
+                dt = datetime.fromisoformat(str(upd).replace("Z", "+00:00"))
+                days = max(0, (datetime.now(timezone.utc) - dt).days)
+            except:
+                days = 30
+
+            if days >= 7:
+                alerts.append({**l, "days_inactive": days, "meddpicc": meddpicc})
+
+        if alerts:
+            alerts.sort(key=lambda x: x["days_inactive"], reverse=True)
+            stage_emoji = {"discovery": "🔵", "meeting": "📅", "solutioning": "🔧",
+                           "proposal": "🟡"}
+
+            msg_lines = [f"🔔 <b>PIPO PROAKTIV-CHECK</b> — {len(alerts)} Leads brauchen Aufmerksamkeit\n"]
+            for a in alerts[:5]:
+                emoji = stage_emoji.get(a["stage"], "⚪")
+                msg_lines.append(
+                    f"{emoji} <b>{a['company']}</b> ({a['stage']}) — "
+                    f"{a['days_inactive']}d inaktiv · MEDDPICC {a['meddpicc']}/80"
+                )
+
+            if len(alerts) > 5:
+                msg_lines.append(f"\n... und {len(alerts)-5} weitere")
+
+            msg_lines.append(f"\n💡 <i>Tippe /top oder /status [company] für Details</i>")
+
+            tg_send(TELEGRAM_CHAT, "\n".join(msg_lines))
+            log(f"Proactive: sent {len(alerts)} stale alerts")
+
+    except Exception as e:
+        log(f"Proactive check error: {e}")
+
+
 # ── Main Loop ─────────────────────────────────────────────────────────────────
 def run_bot():
     log("=== Pipo Bot startet ===")
@@ -972,6 +1631,9 @@ def run_bot():
     offset = 0
     while True:
         try:
+            # Proactive checks (every 6 hours)
+            run_proactive_checks()
+
             updates = tg_get_updates(offset)
             if not updates.get("ok"):
                 time.sleep(5)
@@ -979,6 +1641,22 @@ def run_bot():
 
             for update in updates.get("result", []):
                 offset = update["update_id"] + 1
+
+                # ── Callback Query (Button-Presses) ───────────────────────
+                if "callback_query" in update:
+                    cq = update["callback_query"]
+                    cq_chat = str(cq.get("from", {}).get("id", ""))
+                    if TELEGRAM_CHAT and cq_chat != str(TELEGRAM_CHAT):
+                        log(f"Unauthorized callback from {cq_chat}")
+                        continue
+                    log(f"Callback: {cq.get('data', '')[:60]}")
+                    try:
+                        handle_callback_query(cq)
+                    except Exception as e:
+                        log(f"callback_query error: {e}")
+                    continue
+
+                # ── Normale Text-Nachrichten ──────────────────────────────
                 msg = update.get("message", {})
                 if not msg:
                     continue

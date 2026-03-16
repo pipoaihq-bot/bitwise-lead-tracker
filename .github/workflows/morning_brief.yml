@@ -1,13 +1,19 @@
-name: Pipo Morning Brief
+name: Pipo Daily Briefings
 
 on:
   schedule:
-    # 03:00 UTC = 07:00 Dubai (GST = UTC+4)
-    - cron: '0 3 * * 1-5'   # Mo–Fr automatisch
-  workflow_dispatch:         # manuell auslösbar (Button in GitHub UI)
+    # Morning Brief: 03:00 UTC = 07:00 Dubai (GST = UTC+4), Mo-Fr
+    - cron: '0 3 * * 1-5'
+    # Evening Digest: 14:00 UTC = 18:00 Dubai, Mo-Fr
+    - cron: '0 14 * * 1-5'
+  workflow_dispatch:
     inputs:
+      mode:
+        description: 'morning oder evening'
+        default: 'morning'
+        required: false
       top:
-        description: 'Anzahl Leads'
+        description: 'Anzahl Leads (nur morning)'
         default: '5'
         required: false
       region:
@@ -29,11 +35,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Dependencies
-        run: |
-          pip install --quiet supabase==2.28.0 anthropic>=0.34.0 requests
-
-      - name: Run Pipo Morning Brief
+      - name: Run Pipo Briefing
         env:
           SUPABASE_URL:       ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:       ${{ secrets.SUPABASE_KEY }}
@@ -41,10 +43,27 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          TOP="${{ github.event.inputs.top || '5' }}"
-          REGION="${{ github.event.inputs.region }}"
-          ARGS="--top $TOP"
-          if [ -n "$REGION" ]; then
-            ARGS="$ARGS --region $REGION"
+          # Determine mode: evening cron (14:00 UTC) or manual input
+          HOUR=$(date -u +%H)
+          MODE="${{ github.event.inputs.mode || 'auto' }}"
+          if [ "$MODE" = "auto" ]; then
+            if [ "$HOUR" -ge 12 ]; then
+              MODE="evening"
+            else
+              MODE="morning"
+            fi
           fi
-          python3 pipo_morning_brief.py $ARGS
+
+          if [ "$MODE" = "evening" ]; then
+            echo "Running Evening Digest..."
+            python3 pipo_morning_brief.py --evening
+          else
+            echo "Running Morning Brief..."
+            TOP="${{ github.event.inputs.top || '5' }}"
+            REGION="${{ github.event.inputs.region }}"
+            ARGS="--top $TOP"
+            if [ -n "$REGION" ]; then
+              ARGS="$ARGS --region $REGION"
+            fi
+            python3 pipo_morning_brief.py $ARGS
+          fi
