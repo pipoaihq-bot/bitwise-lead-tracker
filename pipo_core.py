@@ -7,7 +7,7 @@ Contains: Supabase helpers, Telegram helpers, news research, email generation,
           inline keyboard buttons, lead loading.
 """
 
-import os, json, urllib.request, urllib.parse
+import os, json, urllib.request, urllib.parse, random, hashlib
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 
@@ -295,7 +295,13 @@ def days_since(iso_str):
         return 30
 
 def load_top_leads(region=None, top_n=10):
-    """Load and score top leads from Supabase."""
+    """Load and score top leads with DAILY ROTATION.
+
+    Key design: every day you get DIFFERENT leads, not the same top N.
+    - Leads updated in the last 2 days (shown/acted upon) get a heavy penalty
+    - A daily seed ensures different random picks each day
+    - Mix: 60% priority-based + 40% fresh/unseen leads
+    """
     params = ("select=id,company,contact_person,title,email,linkedin,industry,"
               "region,tier,aum_estimate_millions,expected_deal_size_millions,"
               "stage,use_case,updated_at,"
@@ -316,6 +322,10 @@ def load_top_leads(region=None, top_n=10):
             break
         offset += 1000
 
+    # Daily seed for deterministic-but-rotating randomness
+    today_seed = int(hashlib.md5(datetime.now(timezone.utc).strftime("%Y-%m-%d").encode()).hexdigest()[:8], 16)
+    rng = random.Random(today_seed)
+
     scored = []
     for l in all_leads:
         score_data = l.pop("meddpicc_scores", None)
@@ -330,23 +340,66 @@ def load_top_leads(region=None, top_n=10):
         tier_score   = {1: 40, 2: 25, 3: 10, 4: 0}.get(int(tier), 0)
         region_score = REGION_SCORE.get(l.get("region") or "DE", 5)
         meddp_score  = min(meddpicc / 80 * 20, 20)
-        inact_score  = min(days_inactive / 30 * 10, 10)
         deal_score   = min((l.get("expected_deal_size_millions") or 0) / 50 * 5, 5)
-        priority     = tier_score + region_score + meddp_score + inact_score + deal_score
+
+        # ROTATION: leads touched in last 2 days get HEAVY penalty
+        # (shown in briefing = updated_at set to today)
+        if days_inactive <= 1:
+            recency_penalty = -50  # shown today/yesterday → skip
+        elif days_inactive <= 3:
+            recency_penalty = -25  # shown 2-3 days ago → strong penalty
+        elif days_inactive <= 7:
+            recency_penalty = 0    # 4-7 days → neutral
+        else:
+            recency_penalty = min(days_inactive / 30 * 10, 10)  # 7+ days → bonus
+
+        # Daily jitter: ±8 points randomness to shuffle order each day
+        jitter = rng.uniform(-8, 8)
+
+        priority = tier_score + region_score + meddp_score + recency_penalty + deal_score + jitter
 
         scored.append({
             **l,
             "meddpicc": meddpicc,
             "ql": ql,
             "days_inactive": days_inactive,
-            "priority": priority,
+            "priority": round(priority, 1),
             "m_pain": (score_data.get("pain") or 0) if score_data else 0,
             "m_champion": (score_data.get("champion") or 0) if score_data else 0,
             "m_economic": (score_data.get("economic_buyer") or 0) if score_data else 0,
         })
 
     scored.sort(key=lambda x: x["priority"], reverse=True)
-    return scored[:top_n]
+
+    # MIX: top 60% by priority + 40% random from rest (fresh leads)
+    n_priority = max(1, int(top_n * 0.6))
+    n_fresh    = top_n - n_priority
+
+    top_picks = scored[:n_priority]
+    remaining = scored[n_priority:]
+
+    # Fresh picks: prefer leads NOT recently shown (days_inactive > 3)
+    fresh_pool = [l for l in remaining if l["days_inactive"] > 3]
+    if len(fresh_pool) < n_fresh:
+        fresh_pool = remaining  # fallback to all remaining
+
+    rng.shuffle(fresh_pool)
+    fresh_picks = fresh_pool[:n_fresh]
+
+    result = top_picks + fresh_picks
+    # Re-number but keep original priority for display
+    return result[:top_n]
+
+
+def mark_leads_as_shown(lead_ids):
+    """After briefing: update updated_at so leads rotate out for next days.
+    This is the KEY mechanism for daily rotation."""
+    now = datetime.now(timezone.utc).isoformat()
+    for lid in lead_ids:
+        try:
+            sb_patch("leads", f"id=eq.{lid}", {"updated_at": now})
+        except Exception:
+            pass  # non-critical
 
 # ── Stale/Follow-Up Detection ────────────────────────────────────────────────
 def find_stale_leads(days_threshold=5, stage_filter=None):

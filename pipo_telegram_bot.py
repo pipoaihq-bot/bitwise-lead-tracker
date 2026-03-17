@@ -1072,21 +1072,30 @@ def handle_callback_query(callback_query):
 
     log(f"callback: action={action} lead={lead_id} extra={extra}")
 
-    if action == "e":  # ✅ Email gesendet → stage → discovery, last_contact setzen
+    if action == "e":  # ✅ Email gesendet → stage → discovery, updated_at setzen
         try:
+            now_iso = datetime.now(timezone.utc).isoformat()
             sb_patch("leads", f"id=eq.{lead_id}", {
                 "stage": "discovery",
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": now_iso,
             })
-            rows    = sb_get("leads", f"id=eq.{lead_id}&select=company")
+            # Verify write
+            rows = sb_get("leads", f"id=eq.{lead_id}&select=company,stage,updated_at")
             company = rows[0]["company"] if rows else "Lead"
+            verified_stage = rows[0].get("stage", "?") if rows else "?"
+            if verified_stage != "discovery":
+                log(f"WARNING: stage verify failed for {lead_id}: expected discovery, got {verified_stage}")
+                # Retry once
+                sb_patch("leads", f"id=eq.{lead_id}", {"stage": "discovery", "updated_at": now_iso})
             tg_answer_callback(callback_id, "✅ Markiert!")
             tg_send(chat_id,
                 f"✅ <b>{company}</b> — Email als gesendet markiert.\n"
-                f"Stage: <code>discovery</code> · last_contact: heute"
+                f"Stage: <code>discovery</code> · updated_at: heute"
             )
         except Exception as e:
+            log(f"callback e:{lead_id} error: {e}")
             tg_answer_callback(callback_id, f"Fehler: {str(e)[:40]}", alert=True)
+            tg_send(chat_id, f"❌ Fehler beim Schreiben: {str(e)[:100]}\nBitte nochmal versuchen.")
 
     elif action == "r":  # ✏️ Neue Email generieren
         tg_answer_callback(callback_id, "✏️ Generiere…")
@@ -1110,16 +1119,24 @@ def handle_callback_query(callback_query):
     elif action == "s":  # 📊 Stage ändern
         stage_full = STAGE_ABBREV.get(extra, extra)
         try:
+            now_iso = datetime.now(timezone.utc).isoformat()
             sb_patch("leads", f"id=eq.{lead_id}", {
                 "stage": stage_full,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": now_iso,
             })
-            rows    = sb_get("leads", f"id=eq.{lead_id}&select=company")
+            # Verify write
+            rows = sb_get("leads", f"id=eq.{lead_id}&select=company,stage")
             company = rows[0]["company"] if rows else "Lead"
+            verified = rows[0].get("stage", "?") if rows else "?"
+            if verified != stage_full:
+                log(f"WARNING: stage verify failed for {lead_id}: expected {stage_full}, got {verified}")
+                sb_patch("leads", f"id=eq.{lead_id}", {"stage": stage_full, "updated_at": now_iso})
             tg_answer_callback(callback_id, f"Stage: {stage_full}")
             tg_send(chat_id, f"✅ <b>{company}</b> → Stage: <code>{stage_full}</code>")
         except Exception as e:
+            log(f"callback s:{lead_id}:{extra} error: {e}")
             tg_answer_callback(callback_id, f"Fehler: {str(e)[:40]}", alert=True)
+            tg_send(chat_id, f"❌ Fehler beim Stage-Update: {str(e)[:100]}\nBitte nochmal versuchen.")
 
     elif action == "c":  # 💡 Battle Card
         tg_answer_callback(callback_id, "💡 Battle Card…")
@@ -1127,11 +1144,17 @@ def handle_callback_query(callback_query):
         if rows:
             handle_battle_card(chat_id, rows[0]["company"])
 
-    elif action == "sk":  # 🚫 Skip
+    elif action == "sk":  # 🚫 Skip — update timestamp so lead rotates out
+        try:
+            sb_patch("leads", f"id=eq.{lead_id}", {
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception:
+            pass  # non-critical
         tg_answer_callback(callback_id, "⏭️ Übersprungen")
         rows    = sb_get("leads", f"id=eq.{lead_id}&select=company")
         company = rows[0]["company"] if rows else "Lead"
-        tg_send(chat_id, f"⏭️ <b>{company}</b> übersprungen — kein Update.")
+        tg_send(chat_id, f"⏭️ <b>{company}</b> übersprungen — erscheint frühestens in 3 Tagen wieder.")
 
     else:
         tg_answer_callback(callback_id, "❓ Unbekannte Aktion")

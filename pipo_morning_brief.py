@@ -22,7 +22,7 @@ from datetime import datetime
 from pipo_core import (
     SUPABASE_KEY, ANTHROPIC_KEY, TELEGRAM_TOKEN, TELEGRAM_CHAT,
     DASHBOARD_URL,
-    tg_send, make_lead_buttons, load_top_leads,
+    tg_send, make_lead_buttons, load_top_leads, mark_leads_as_shown,
     research_company_news, generate_email_draft, format_lead_message,
     find_stale_leads, find_very_stale_leads, sb_get,
 )
@@ -207,6 +207,12 @@ Jede Email ist fertig zum Senden — kein Copy-Paste nötig.
         else:
             print(f"\n{BOLD}LEAD {i}:{X}\n{msg}\n")
             print(f"\n{'_'*60}\n")
+
+    # Mark shown leads so they rotate out for tomorrow
+    if not dry_run:
+        shown_ids = [l.get("id") for l in leads if l.get("id")]
+        mark_leads_as_shown(shown_ids)
+        print(f"  -> {G}{len(shown_ids)} Leads als gezeigt markiert (Rotation){X}")
 
     # Follow-Up Reminders
     print(f"\n{B}Checking follow-ups...{X}")
