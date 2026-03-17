@@ -316,7 +316,7 @@ def pipo_chat(messages, df_stats):
         if not api_key:
             return "⚠️ ANTHROPIC_API_KEY nicht gesetzt. Bitte in Streamlit Cloud → Secrets hinzufügen."
         client = anthropic.Anthropic(api_key=api_key)
-        system = f"""Du bist Pipo, der autonome Pre-Sales Chief of Staff von Philipp Sandor (HEAD of EMEA, Bitwise Asset Management, Dubai).
+        system = f"""Du bist Pipo, der autonome Pre-Sales Chief of Staff von Philipp Sandor (HEAD of EMEA, Bitwise Asset Management, Lissabon).
 
 BITWISE FAKTEN (für Pitches):
 - $15B+ AUM weltweit | 40+ Produkte | 4.000+ institutionelle Clients | Est. 2017

@@ -177,7 +177,7 @@ def generate_email_draft(lead, news_items):
     )
     anrede = lead.get("contact_person", "").split()[0] if lead.get("contact_person") else "zusammen"
 
-    prompt = f"""Du bist Pipo, Pre-Sales Analyst für Philipp Sandor (HEAD EMEA, Bitwise Asset Management, Dubai).
+    prompt = f"""Du bist Pipo, Pre-Sales Analyst für Philipp Sandor (HEAD EMEA, Bitwise Asset Management, Lissabon).
 
 DEINE AUFGABE: Analysiere diesen Lead und schreibe eine Email GENAU in Philipps Stimme.
 
@@ -218,7 +218,7 @@ ANREDE:
 - Traditionelle Bank/Versicherung → "Sie"
 
 SIGNATUR:
-- Deutsch: "Viele Grüße aus Dubai,\\nPhilipp"
+- Deutsch: "Viele Grüße aus Lissabon,\\nPhilipp"
 - Englisch: "Best,\\nPhilipp"
 
 VERBOTEN:
@@ -231,7 +231,7 @@ VERBOTEN:
 ❌ Subject mit Fragezeichen UND Ausrufezeichen
 
 ECHTE PHILIPP-BEISPIELE:
-→ "Hallo Pascal, vielen Dank für deine herzliche Nachricht. Bei uns stehen große Neuigkeiten an — ich würde mich gerne kurz austauschen. Wäre dir ein 15-minütiges Gespräch nächste Woche möglich? Viele Grüße aus Dubai, Philipp"
+→ "Hallo Pascal, vielen Dank für deine herzliche Nachricht. Bei uns stehen große Neuigkeiten an — ich würde mich gerne kurz austauschen. Wäre dir ein 15-minütiges Gespräch nächste Woche möglich? Viele Grüße aus Lissabon, Philipp"
 → "Hi Guy, Really enjoyed the chat earlier. From what you shared, I feel like there's a solid overlap — particularly around integration and reporting. Once you've had a chance to look through the deck, just send me a few time slots. Best, Philipp"
 
 Antworte NUR in diesem JSON-Format:

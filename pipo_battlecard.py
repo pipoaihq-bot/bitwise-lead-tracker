@@ -643,7 +643,7 @@ def generate_battlecard(lead, research):
         cu_text,
     ])
 
-    prompt = f"""Du bist Pipo, Senior Pre-Sales Analyst für Philipp Sandor (HEAD EMEA, Bitwise Asset Management, Dubai).
+    prompt = f"""Du bist Pipo, Senior Pre-Sales Analyst für Philipp Sandor (HEAD EMEA, Bitwise Asset Management, Lissabon).
 
 DEINE AUFGABE: Erstelle eine vollständige Battle Card für diesen Lead. Nutze NUR die bereitgestellten Research-Daten. Erfinde NICHTS.
 
@@ -687,7 +687,7 @@ PHILIPPS SCHREIBSTIL (ZWINGEND EINHALTEN)
 - Anrede: {"'du' / '" + first_name + "'" if use_du else "'Sie' / '" + first_name + "'"}
 - Crypto/Startup/Fintech → immer "du"
 - Traditionelle Bank/Versicherung → "Sie"
-- Signatur DE: "Viele Grüße aus Dubai,\\nPhilipp"
+- Signatur DE: "Viele Grüße aus Lissabon,\\nPhilipp"
 - Signatur EN: "Best,\\nPhilipp"
 - VERBOTEN: Buzzwords, mehrere Produkt-Facts, "Ich hoffe...", mehrere CTAs
 

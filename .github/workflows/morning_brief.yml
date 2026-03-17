@@ -2,10 +2,10 @@ name: Pipo Daily Briefings
 
 on:
   schedule:
-    # Morning Brief: 03:00 UTC = 07:00 Dubai (GST = UTC+4), Mo-Fr
-    - cron: '0 3 * * 1-5'
-    # Evening Digest: 14:00 UTC = 18:00 Dubai, Mo-Fr
-    - cron: '0 14 * * 1-5'
+    # Morning Brief: 06:00 UTC = 07:00 Portugal (WEST/UTC+1 Sommer), Mo-Fr
+    - cron: '0 6 * * 1-5'
+    # Evening Digest: 17:00 UTC = 18:00 Portugal (WEST/UTC+1 Sommer), Mo-Fr
+    - cron: '0 17 * * 1-5'
   workflow_dispatch:
     inputs:
       mode:
@@ -43,7 +43,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          # Determine mode: evening cron (14:00 UTC) or manual input
+          # Determine mode: evening cron (17:00 UTC) or manual input
           HOUR=$(date -u +%H)
           MODE="${{ github.event.inputs.mode || 'auto' }}"
           if [ "$MODE" = "auto" ]; then

@@ -558,7 +558,7 @@ def generate_email_draft(lead, news_items):
     )
     anrede = lead.get("contact_person", "").split()[0] if lead.get("contact_person") else "zusammen"
 
-    prompt = f"""Du bist Pipo, Pre-Sales Analyst für Philipp Sandor (HEAD EMEA, Bitwise Asset Management, Dubai).
+    prompt = f"""Du bist Pipo, Pre-Sales Analyst für Philipp Sandor (HEAD EMEA, Bitwise Asset Management, Lissabon).
 
 DEINE AUFGABE: Analysiere diesen Lead und schreibe eine Email GENAU in Philipps Stimme.
 
@@ -588,7 +588,7 @@ STRUKTUR (max. 4 Sätze im Body):
 3. EIN spezifischer Bitwise-Fakt — 1 Satz
 4. CTA: "Wäre ein 15-minütiger Austausch nächste Woche möglich?" ODER "https://calendly.com/psandor/30min"
 ANREDE: {'Verwende "du": "Hallo ' + anrede + ',"' if use_du else 'Verwende "Sie": "Hallo ' + anrede + ',"'}
-SIGNATUR: {'Viele Grüße aus Dubai,\\nPhilipp' if lang == 'Deutsch' else 'Best,\\nPhilipp'}
+SIGNATUR: {'Viele Grüße aus Lissabon,\\nPhilipp' if lang == 'Deutsch' else 'Best,\\nPhilipp'}
 
 VERBOTEN: ❌ Mehrere Facts ❌ "revolutionär" ❌ "Ich hoffe..." ❌ Mehr als 1 CTA
 
