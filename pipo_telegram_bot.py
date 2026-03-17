@@ -1110,7 +1110,10 @@ def handle_callback_query(callback_query):
     elif action == "s":  # 📊 Stage ändern
         stage_full = STAGE_ABBREV.get(extra, extra)
         try:
-            sb_patch("leads", f"id=eq.{lead_id}", {"stage": stage_full})
+            sb_patch("leads", f"id=eq.{lead_id}", {
+                "stage": stage_full,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
             rows    = sb_get("leads", f"id=eq.{lead_id}&select=company")
             company = rows[0]["company"] if rows else "Lead"
             tg_answer_callback(callback_id, f"Stage: {stage_full}")
