@@ -13,7 +13,7 @@ Usage:
 """
 
 import os, sys, json, argparse, urllib.request, urllib.parse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # ── Config ────────────────────────────────────────────────────────────────────
 SUPABASE_URL   = os.environ.get("SUPABASE_URL",  "https://cxrhqzggukuqxpsausrd.supabase.co")
@@ -114,7 +114,7 @@ def load_active_leads():
 # ── Load Pending Follow-Ups ───────────────────────────────────────────────────
 def load_pending_followups():
     """Lädt Leads mit followup_scheduled Activity die >5 Tage alt ist."""
-    cutoff = (datetime.utcnow() - timedelta(days=5)).isoformat() + "Z"
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
     params = (
         f"select=lead_id,created_at"
         f"&action=eq.followup_scheduled"

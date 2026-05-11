@@ -12,7 +12,7 @@ Usage:
 """
 
 import os, sys, json, argparse, urllib.request, re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # ── Config ────────────────────────────────────────────────────────────────────
 SUPABASE_URL   = os.environ.get("SUPABASE_URL",  "https://cxrhqzggukuqxpsausrd.supabase.co")
@@ -61,17 +61,18 @@ def tg_send(text, parse_mode="HTML"):
 
 # ── Todays Stats ──────────────────────────────────────────────────────────────
 def get_todays_stats():
-    today = datetime.utcnow().strftime("%Y-%m-%d")
-    tomorrow = (datetime.utcnow() + timedelta(days=1)).strftime("%Y-%m-%d")
+    now_utc = datetime.now(timezone.utc)
+    today = now_utc.strftime("%Y-%m-%d")
+    tomorrow = (now_utc + timedelta(days=1)).strftime("%Y-%m-%d")
 
     stats = {}
 
-    # Aktivitäten heute
+    # Aktivitäten heute — PostgREST range mit separaten Filtern
     try:
         activities = sb_get("activities",
-            f"select=id,action,lead_id"
-            f"&created_at=gte.{today}T00:00:00Z"
-            f"&created_at=lt.{tomorrow}T00:00:00Z"
+            f"select=action,lead_id,created_at"
+            f"&created_at=gte.{today}T00%3A00%3A00Z"
+            f"&created_at=lt.{tomorrow}T00%3A00%3A00Z"
             f"&limit=500"
         )
         stats["activities_total"] = len(activities)
